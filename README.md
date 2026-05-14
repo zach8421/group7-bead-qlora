@@ -133,6 +133,61 @@ outputs/qlora_<size>/
 └── run_meta.json               # args, libs, host, slurm job id, git head, input sha256s
 ```
 
+## Syncing files with Tillicum
+
+Tillicum has no git, so all transfers go over `ssh`/`rsync`. The team shares a
+single clone at `/gpfs/projects/imt526a/group7` — there are no per-user
+copies, so simultaneous `push-code` from two teammates will silently overwrite
+each other on a per-file basis. Coordinate before pushing.
+
+`scripts/tillicum_sync.sh` wraps the common cases. One-time setup — put your
+Tillicum username (typically different from your local `$USER`) in your shell rc:
+
+```bash
+# ~/.zshrc or ~/.bashrc
+export TILLICUM_USER=your_tillicum_username
+# Optional — these have sensible defaults:
+# export TILLICUM_HOST=tillicum.hyak.uw.edu
+# export TILLICUM_PROJECT=/gpfs/projects/imt526a/group7
+```
+
+Then from anywhere in the repo:
+
+```bash
+# Local -> Tillicum: code, docs, splits_manifest.json (excludes outputs/, logs/,
+# raw CSVs, frozen JSONLs — these are either pulled DOWN later or regenerated).
+scripts/tillicum_sync.sh push-code
+
+# Local -> Tillicum: raw BEAD CSVs + locally-frozen JSONLs (only if you froze
+# locally and want to skip running freeze_splits.py on Tillicum).
+scripts/tillicum_sync.sh push-data
+
+# Tillicum -> Local: outputs/qlora_*/ (adapters, predictions, metrics, run_meta).
+# Skips outputs/tillicum_1k_calibration/ (v1, already on local + in git).
+scripts/tillicum_sync.sh pull-results
+
+# Tillicum -> Local: slurm .out/.err.
+scripts/tillicum_sync.sh pull-logs
+
+# Both pulls.
+scripts/tillicum_sync.sh pull-all
+
+# Sanity check what's on the remote (ssh + ls + squeue).
+scripts/tillicum_sync.sh status
+
+# Always preview a transfer first if you're unsure — rsync runs in --dry-run
+# mode and prints what it would change.
+scripts/tillicum_sync.sh --dry-run push-code
+```
+
+Typical workflow for a sweep:
+
+1. Edit code locally → commit + push to GitHub (audit trail for teammates).
+2. `scripts/tillicum_sync.sh push-code` → mirror working tree to Tillicum.
+3. `ssh ${TILLICUM_USER}@tillicum.hyak.uw.edu` → `cd /gpfs/projects/imt526a/group7` → `sbatch --export=ALL,SIZE=100 scripts/run_qlora.slurm`.
+4. After the job: `scripts/tillicum_sync.sh pull-all` from local.
+5. `git add outputs/qlora_*/run_meta.json outputs/qlora_*/train_metrics.json outputs/qlora_*/eval_metrics.json outputs/manifest.csv outputs/manifest.json && git commit` (adapters / predictions / checkpoints stay gitignored).
+
 ## Frozen splits — what your teammates need
 
 `data/frozen/splits_manifest.json` is the source of truth. Every split has
