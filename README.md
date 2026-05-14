@@ -28,6 +28,7 @@ baseline. Targets run on a single H200 via UW's Tillicum cluster.
 │   ├── bead/                              # raw BEAD CSVs (CC BY-NC 4.0; .csv files gitignored — see README in folder)
 │   └── frozen/                            # splits_manifest.json is tracked; the JSONLs are gitignored and regenerable
 ├── docs/
+│   ├── proposal_v2.txt                    # the May 9 Project Proposal v2 (full narrative)
 │   └── v1_calibration_writeup.md          # the May 9 calibration run writeup
 ├── outputs/
 │   └── tillicum_1k_calibration/           # v1 metrics + predictions (adapter weights gitignored)
