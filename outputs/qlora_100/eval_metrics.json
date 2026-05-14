@@ -1,0 +1,14 @@
+{
+  "run_name": "qlora_100",
+  "n_examples": 6816,
+  "accuracy": 0.4989730046948357,
+  "precision_pos": 0.49911842491918895,
+  "recall_pos": 0.9982368498383779,
+  "f1_pos": 0.6654912332255852,
+  "f1_macro": 0.33391418219853614,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.4000    0.0012    0.0023      3413\n      biased     0.4991    0.9982    0.6655      3403\n\n    accuracy                         0.4990      6816\n   macro avg     0.4496    0.4997    0.3339      6816\nweighted avg     0.4495    0.4990    0.3334      6816\n",
+  "eval_seconds": 863.744,
+  "smoke_test": false,
+  "adapter_path": "outputs/qlora_100/adapter",
+  "test_jsonl": "data/frozen/test_held_out.jsonl"
+}
