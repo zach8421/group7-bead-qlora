@@ -40,6 +40,19 @@ case "$SIZE" in
   *)     echo "Unknown SIZE='$SIZE'. Use 100|500|1k|5k|full." >&2; exit 2 ;;
 esac
 
+# Intermediate checkpoints only for the longest run. 27,263 examples with
+# effective batch 16 ⇒ ~1,700 steps/epoch × 3 epochs ≈ 5,100 steps. Saving
+# every 800 steps gives roughly one checkpoint per ~30 min of wall-clock on
+# the H200 (per the v1 calibration projection of ~2.5h total), so a node
+# failure costs at most ~30 min of compute.
+if [[ "$SIZE" == "full" ]]; then
+  SAVE_STEPS="${SAVE_STEPS:-800}"
+  SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-2}"
+else
+  SAVE_STEPS="${SAVE_STEPS:-0}"
+  SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-2}"
+fi
+
 RUN_NAME="qlora_${SIZE}"
 OUTPUT_DIR="outputs/${RUN_NAME}"
 TEST_FILE="data/frozen/test_held_out.jsonl"
@@ -81,10 +94,31 @@ which python
 python --version
 nvidia-smi || true
 
-# 1. Sanity: frozen splits exist. If not, build them. (Idempotent.)
-if [[ ! -f "$TRAIN_FILE" || ! -f "$TEST_FILE" ]]; then
-  echo "[slurm] Frozen splits missing — running freeze_splits.py ..."
-  python scripts/freeze_splits.py --csv-dir data/bead --out-dir data/frozen
+# 1. Sanity: frozen splits exist and match the committed manifest.
+#    If JSONLs are missing we regenerate them, but we always verify the on-disk
+#    bytes hash to the sha256s recorded in the committed splits_manifest.json.
+#    This is the only thing standing between us and a silently-drifted test set
+#    (which would invalidate cross-method comparisons against TF-IDF / 3-shot).
+COMMITTED_MANIFEST="data/frozen/splits_manifest.json"
+if [[ -f "$COMMITTED_MANIFEST" ]]; then
+  REF_MANIFEST_SNAPSHOT="$(mktemp -t splits_manifest_committed.XXXXXX.json)"
+  cp "$COMMITTED_MANIFEST" "$REF_MANIFEST_SNAPSHOT"
+  trap 'rm -f "$REF_MANIFEST_SNAPSHOT"' EXIT
+
+  if [[ ! -f "$TRAIN_FILE" || ! -f "$TEST_FILE" ]]; then
+    echo "[slurm] Frozen splits missing — running freeze_splits.py ..."
+    python scripts/freeze_splits.py --csv-dir data/bead --out-dir data/frozen
+  fi
+
+  echo "[slurm] Verifying on-disk splits against committed manifest ..."
+  python scripts/verify_splits_manifest.py \
+    --frozen-dir data/frozen \
+    --reference-manifest "$REF_MANIFEST_SNAPSHOT"
+else
+  echo "[slurm] WARNING: $COMMITTED_MANIFEST not present — building from scratch with no reference to verify against." >&2
+  if [[ ! -f "$TRAIN_FILE" || ! -f "$TEST_FILE" ]]; then
+    python scripts/freeze_splits.py --csv-dir data/bead --out-dir data/frozen
+  fi
 fi
 
 # 2. Train.
@@ -96,7 +130,9 @@ python scripts/train_qlora.py \
   --per-device-batch-size "$PER_DEVICE_BS" \
   --grad-accum "$GRAD_ACCUM" \
   --max-seq-length "$MAX_SEQ_LEN" \
-  --num-epochs "$EPOCHS"
+  --num-epochs "$EPOCHS" \
+  --save-steps "$SAVE_STEPS" \
+  --save-total-limit "$SAVE_TOTAL_LIMIT"
 
 # 3. Eval on held-out test.
 echo "[slurm] Evaluating $RUN_NAME on $TEST_FILE ..."

@@ -51,6 +51,9 @@ COLUMNS = [
     "hostname",
     "slurm_job_id",
     "train_jsonl_sha256",
+    "splits_manifest_sha256",
+    "label_str_0",
+    "label_str_1",
 ]
 
 
@@ -76,6 +79,7 @@ def build_row(run_dir: Path) -> dict:
 
     host = meta.get("host") or {}
     inputs = meta.get("inputs") or {}
+    label_map = inputs.get("splits_label_map") or {}
 
     row = {
         "run_name": run_name,
@@ -105,6 +109,9 @@ def build_row(run_dir: Path) -> dict:
         "hostname": host.get("hostname"),
         "slurm_job_id": host.get("slurm_job_id"),
         "train_jsonl_sha256": inputs.get("train_jsonl_sha256"),
+        "splits_manifest_sha256": inputs.get("splits_manifest_sha256"),
+        "label_str_0": label_map.get("0"),
+        "label_str_1": label_map.get("1"),
     }
     return row
 

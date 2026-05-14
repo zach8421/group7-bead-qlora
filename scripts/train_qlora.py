@@ -202,6 +202,9 @@ def main():
     ap.add_argument("--logging-steps", type=int, default=10)
     ap.add_argument("--save-steps", type=int, default=0,
                     help="0 = save only at end. Set >0 for intermediate checkpoints.")
+    ap.add_argument("--save-total-limit", type=int, default=2,
+                    help="Cap retained intermediate checkpoints to avoid disk bloat. "
+                         "Ignored when --save-steps=0.")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--smoke-test", action="store_true")
     ap.add_argument("--max-train-rows", type=int, default=0,
@@ -213,19 +216,43 @@ def main():
     print(f"[train] Device: {device}  smoke: {args.smoke_test}  run: {args.run_name}")
 
     from datasets import Dataset
-    from transformers import TrainingArguments
     try:
         from trl import SFTTrainer, SFTConfig
-        HAS_SFTCONFIG = True
-    except ImportError:
-        from trl import SFTTrainer
-        SFTConfig = None
-        HAS_SFTCONFIG = False
+    except ImportError as e:
+        sys.exit(
+            "[train] Cannot import trl.SFTConfig. This codebase requires a trl "
+            "release that supports the completion_only_loss=True parameter on "
+            "SFTConfig (requirements.txt pins trl==1.3.0). Without it the "
+            "trainer would silently compute loss over the full prompt instead "
+            "of just the assistant completion, invalidating the proposal's "
+            f"setup. Underlying ImportError: {e}"
+        )
 
     train_path = Path(args.train_jsonl)
     if not train_path.exists():
         sys.exit(f"[train] {train_path} not found. Run freeze_splits.py first.")
     train_sha = sha256_of_file(train_path)
+
+    # Catch silent split drift: if the manifest knows about this split, the file's
+    # actual sha256 must match. The slurm launcher does a broader check across all
+    # splits via verify_splits_manifest.py; this guard covers direct invocation.
+    splits_manifest_path = Path(args.splits_manifest)
+    if splits_manifest_path.exists():
+        manifest_data = json.loads(splits_manifest_path.read_text())
+        for split_name, info in (manifest_data.get("splits") or {}).items():
+            if info.get("path") == train_path.name:
+                expected_sha = info.get("sha256")
+                if expected_sha and expected_sha != train_sha:
+                    sys.exit(
+                        f"[train] sha256 mismatch for {train_path}:\n"
+                        f"  expected (manifest {splits_manifest_path}, split {split_name}): {expected_sha}\n"
+                        f"  actual:                                                          {train_sha}\n"
+                        f"  Splits drifted from the committed manifest. Rebuild via "
+                        f"scripts/freeze_splits.py and rerun scripts/verify_splits_manifest.py."
+                    )
+                print(f"[train] Verified train_jsonl sha256 matches manifest split '{split_name}'")
+                break
+
     rows = load_jsonl(train_path)
     if args.max_train_rows > 0:
         rows = rows[: args.max_train_rows]
@@ -277,6 +304,7 @@ def main():
         logging_steps=args.logging_steps,
         save_strategy="no" if args.save_steps == 0 else "steps",
         save_steps=args.save_steps if args.save_steps > 0 else 1,
+        save_total_limit=args.save_total_limit if args.save_steps > 0 else None,
         report_to="none",
         seed=args.seed,
         bf16=(not args.smoke_test) and torch.cuda.is_bf16_supported(),
@@ -287,31 +315,36 @@ def main():
         lr_scheduler_type="cosine",
     )
 
-    if HAS_SFTCONFIG:
-        import inspect
-        sft_sig = set(inspect.signature(SFTConfig.__init__).parameters.keys())
-        sft_extra = {}
-        if "max_length" in sft_sig:
-            sft_extra["max_length"] = args.max_seq_length
-        elif "max_seq_length" in sft_sig:
-            sft_extra["max_seq_length"] = args.max_seq_length
-        if "packing" in sft_sig:
-            sft_extra["packing"] = False
-        if "completion_only_loss" in sft_sig:
-            sft_extra["completion_only_loss"] = True
-        sft_cfg = SFTConfig(**common_args, **sft_extra)
-        sft_trainer_sig = set(inspect.signature(SFTTrainer.__init__).parameters.keys())
-        trainer_kwargs = dict(model=model, args=sft_cfg, train_dataset=train_ds)
-        if "processing_class" in sft_trainer_sig:
-            trainer_kwargs["processing_class"] = tokenizer
-        else:
-            trainer_kwargs["tokenizer"] = tokenizer
-    else:
-        targs = TrainingArguments(**common_args)
-        trainer_kwargs = dict(
-            model=model, args=targs, train_dataset=train_ds, tokenizer=tokenizer,
-            max_seq_length=args.max_seq_length, packing=False,
+    import inspect
+    sft_sig = set(inspect.signature(SFTConfig.__init__).parameters.keys())
+    if "completion_only_loss" not in sft_sig:
+        import trl
+        sys.exit(
+            "[train] SFTConfig does not accept 'completion_only_loss' "
+            f"(trl version: {getattr(trl, '__version__', 'unknown')}). "
+            "Without this parameter the trainer would silently compute loss "
+            "over the entire prompt instead of just the assistant completion, "
+            "invalidating the proposal's 'completion-only loss on the assistant "
+            "label' setup. Pin trl to a release that supports completion_only_loss "
+            "(requirements.txt has trl==1.3.0)."
         )
+
+    sft_extra = {"completion_only_loss": True}
+    if "max_length" in sft_sig:
+        sft_extra["max_length"] = args.max_seq_length
+    elif "max_seq_length" in sft_sig:
+        sft_extra["max_seq_length"] = args.max_seq_length
+    if "packing" in sft_sig:
+        sft_extra["packing"] = False
+    sft_cfg = SFTConfig(**common_args, **sft_extra)
+
+    sft_trainer_sig = set(inspect.signature(SFTTrainer.__init__).parameters.keys())
+    trainer_kwargs = dict(model=model, args=sft_cfg, train_dataset=train_ds)
+    if "processing_class" in sft_trainer_sig:
+        trainer_kwargs["processing_class"] = tokenizer
+    else:
+        trainer_kwargs["tokenizer"] = tokenizer
+    print("[train] completion_only_loss=True (loss masked to assistant turn)")
     trainer = SFTTrainer(**trainer_kwargs)
 
     if torch.cuda.is_available():
@@ -367,9 +400,14 @@ def main():
     metrics_path.write_text(json.dumps(train_metrics, indent=2))
 
     splits_manifest_sha = None
+    splits_manifest_label_map: dict[str, str] | None = None
     splits_manifest_path = Path(args.splits_manifest)
     if splits_manifest_path.exists():
         splits_manifest_sha = sha256_of_file(splits_manifest_path)
+        manifest_data = json.loads(splits_manifest_path.read_text())
+        lm = manifest_data.get("label_map")
+        if isinstance(lm, dict):
+            splits_manifest_label_map = {str(k): str(v) for k, v in lm.items()}
 
     run_meta = {
         "run_name": args.run_name,
@@ -392,6 +430,7 @@ def main():
             "train_jsonl_sha256": train_sha,
             "splits_manifest": str(splits_manifest_path) if splits_manifest_path.exists() else None,
             "splits_manifest_sha256": splits_manifest_sha,
+            "splits_label_map": splits_manifest_label_map,
         },
         "outputs": {
             "adapter_path": str(adapter_path),
