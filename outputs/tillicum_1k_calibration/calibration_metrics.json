@@ -1,0 +1,23 @@
+{
+  "smoke_test": false,
+  "model_name": "meta-llama/Llama-3.1-8B-Instruct",
+  "device": "cuda",
+  "compute_dtype": "torch.bfloat16",
+  "examples": 1000,
+  "per_device_batch_size": 4,
+  "grad_accum": 4,
+  "effective_batch_size": 16,
+  "max_seq_length": 512,
+  "num_epochs": 1.0,
+  "learning_rate": 0.0002,
+  "trainable_params": 41943040,
+  "total_params": 4582543360,
+  "wall_clock_sec": 94.596,
+  "wall_clock_min": 1.577,
+  "peak_cuda_memory_gb": 14.571,
+  "train_loss_final": 1.5172044663202195,
+  "global_steps": 63,
+  "throughput_examples_per_sec": 10.571,
+  "adapter_path": "outputs/tillicum_1k_calibration/adapter",
+  "seed": 42
+}

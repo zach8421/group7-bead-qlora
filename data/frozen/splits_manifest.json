@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "seed": 42,
+  "source": "csv:data/bead",
+  "label_map": {
+    "0": "non-biased",
+    "1": "biased"
+  },
+  "test_frac_of_original_train": 0.2,
+  "nesting": "train_100 ⊂ train_500 ⊂ train_1k ⊂ train_5k ⊂ train_full",
+  "splits": {
+    "train_full": {
+      "path": "train_full.jsonl",
+      "sha256": "dc43cc19a568ba964d81e6751db20799371fc692f945d4fb87e18a69620c14c7",
+      "n": 27263,
+      "label_0": 13652,
+      "label_1": 13611,
+      "pct_label_1": 0.4992
+    },
+    "train_5k": {
+      "path": "train_5k.jsonl",
+      "sha256": "d859c50c8f2aca214506b742e4604a1fc03a90b7e814fd78ebebc8e29fe32baf",
+      "n": 5000,
+      "label_0": 2504,
+      "label_1": 2496,
+      "pct_label_1": 0.4992
+    },
+    "train_1k": {
+      "path": "train_1k.jsonl",
+      "sha256": "d902613f66d5d9bf4689a355d5caae346f1db6c3046c087f99260708b22ff0c2",
+      "n": 1000,
+      "label_0": 501,
+      "label_1": 499,
+      "pct_label_1": 0.499
+    },
+    "train_500": {
+      "path": "train_500.jsonl",
+      "sha256": "5575a832ea4a9d93e7b31768cd6944e1e4d756423faa5ff6fc31114cbc20552c",
+      "n": 500,
+      "label_0": 251,
+      "label_1": 249,
+      "pct_label_1": 0.498
+    },
+    "train_100": {
+      "path": "train_100.jsonl",
+      "sha256": "09681c11a099daf959531acc743bdb74130104ada4ee9924ed27fa34182311f5",
+      "n": 100,
+      "label_0": 50,
+      "label_1": 50,
+      "pct_label_1": 0.5
+    },
+    "val": {
+      "path": "val.jsonl",
+      "sha256": "92a9b6ff684ec16c46966a09e82e213cc68ef7dcb48ddf6c4167676095e36db3",
+      "n": 8520,
+      "label_0": 4266,
+      "label_1": 4254,
+      "pct_label_1": 0.4993
+    },
+    "test_held_out": {
+      "path": "test_held_out.jsonl",
+      "sha256": "8d3907dcf66a711d92ddc83a8f5ac4a948b91edacbafd40310299b5c0c77fd3d",
+      "n": 6816,
+      "label_0": 3413,
+      "label_1": 3403,
+      "pct_label_1": 0.4993
+    }
+  }
+}

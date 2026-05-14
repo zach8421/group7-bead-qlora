@@ -1,0 +1,578 @@
+Project Proposal v2
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A - Spring 2026
+Prof. George Harker
+May 9, 2026
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+1. Problem & product context
+Our LLM component could belong to a media literacy browser extension that helps general
+news readers be aware of potential framing in the articles they consume. When a user visits a
+news article or pastes in a headline, the extension surfaces a single label indicating whether the
+article is biased or not biased. The intended users are general news readers who want a
+second-opinion signal before forming or sharing an opinion. The decision the tool supports is
+whether or not readers should seek out additional perspectives on a story before accepting its
+framing.
+A language model is necessary because detecting bias requires understanding context and
+nuance rather than surface-level vocabulary. Simpler approaches like keyword and BOW
+models can identify this surface-level language but fail when framing is expressed through word
+order, subtle adjective choice, what a sentence omits, or the rhetorical structure of a paragraph.
+These signals require a model that reads text in full context, with sensitivity to how meaning is
+constructed across a sentence or article. An LLM brings that capacity, and fine-tuning it on
+annotated examples adapts that general language understanding to this specific binary
+classification task.
+There are a few elements that are out of scope for our project: A user-facing UI, article retrieval
+or scraping, real-time news ingestion, and any personalization or recommendation layer. We are
+building and evaluating the classification model only.
+2. Approach
+We fine-tune Llama-3.1-8B-Instruct to classify text snippets as either biased or non-biased using
+a decoder-only causal language modeling formulation. We chose this model because it is
+open-weight, well-documented, instruction-tuned, and fits within our compute budget while still
+being large enough to support meaningful few-shot prompting baselines. Keeping the same
+model family for both prompting and supervised fine-tuning allows us to isolate the effect of
+supervision rather than comparing fundamentally different architectures.
+Instead of attaching a separate classification head, we frame classification as constrained
+next-token prediction. Each training example is formatted as an instruction-following prompt,
+and the model is trained to generate either “biased” or “non-biased” as the completion. We
+optimize standard next-token cross-entropy loss only on the label tokens. This avoids
+compatibility issues between 4-bit quantization and custom classification heads while keeping
+training aligned with the model’s native autoregressive objective. Training uses completion-only
+loss on the assistant label response so gradients are applied only to the generated classification
+token rather than the full prompt context.
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+We use QLoRA as the parameter-efficient fine-tuning method. The base model weights are
+frozen and quantized to 4-bit precision, while low-rank adapter weights are trained in higher
+precision. This substantially reduces memory usage and compute cost, making it feasible to run
+multiple learning-curve experiments across different dataset sizes within the project budget.
+QLoRA is widely used for supervised adaptation of decoder-only LLMs and is sufficient for a
+binary classification task at this dataset scale.
+Our primary comparison is between few-shot prompting and supervised fine-tuning within the
+same Llama-3.1-8B model family. We evaluate performance across training set sizes of 100,
+500, 1k, 5k, and the full training split to measure how supervision changes classification quality
+as more labeled data becomes available. We also include a traditional TF-IDF plus logistic
+regression baseline to establish a lightweight non-LLM reference point.
+At inference time, the model predicts between the constrained label tokens “biased” and
+“non-biased.” We compute F1, precision, recall, and accuracy on the held-out test set using
+HuggingFace Transformers and PEFT tooling. This design keeps the modeling setup consistent
+across prompting and fine-tuning while minimizing architectural complexity and compute
+overhead.
+3. Data
+We will use the Bias Evaluation Across Domains (BEAD) dataset available at
+https://huggingface.co/datasets/shainar/BEAD. BEAD aggregates and re-labels several existing
+datasets to support multiple NLP bias evaluation tasks. We will only use the text classification
+bias split, which provides binary labels: biased or non-biased. The dataset is licensed under CC
+BY-NC 4.0 (Creative Commons Attribution Non-Commercial), meaning we can use it freely for
+our academic research purposes.
+The bias classification split contains 34,079 training examples (~9 MB) and 8,520 validation
+examples (~2 MB), for a combined raw file size of approximately 10.5 MB. Token counts are not
+published by the dataset authors; estimates from the compute section detailed below project
+tokenized datasets at 50–200 MB depending on sequence length and tokenizer. Since BEAD
+doesn't provide a separate test split for this task, we carve 20% of the training set (~6,816
+examples) as a held-out test set before any development begins. This test set is never used for
+training, validation, or model selection. The remaining ~27,263 training examples are used for
+the fine-tuning sweep across data sizes of 100, 500, 1k, 5k, and full train. The provided
+validation split (8,520 examples) is used for model selection and hyperparameter tuning during
+development. In terms of class balance, the dataset is almost evenly split. 17,065 examples are
+labeled non-biased (label 0) and 17,014 are labeled biased (label 1), representing a 50.1% /
+49.9% split.
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+Labels were generated by GPT-4 and reviewed by a 12-member expert panel; no independently
+human-annotated ground truth. The paper reports a Cohen's Kappa of 0.67 between GPT-4 and
+human-verified labels for the text classification task, indicating substantial agreement. This
+Kappa reflects the rate of disagreement between GPT-4 and human reviewers rather than
+between independent human annotators, so traditional inter-annotator agreement figures are
+not available. Some label noise should be expected, and this Kappa score sets a practical
+ceiling on achievable F1.
+Preprocessing includes text cleaning, deduplication, train/test splitting, and tokenization,
+corresponding to the data preprocessing run in the compute budget (0.5 H200-hrs). Storage
+requirement details are listed in the next section for a total peak storage of approximately 6 GB.
+4. Compute & storage budget
+Run Model Method Dataset H200-hrs
+Data preprocessing — Filtering, splits,
+tokenization
+BEAD bias
+train/valid
+0.5
+Traditional baseline TF-IDF with logistic
+regression
+Train and eval 100, 500, 1k,
+5k, full train
+0
+Few-shot prompting
+eval
+Llama-3.1-8B-Instru
+ct
+3-shot inference Held-out test
+set
+0.35
+QLoRA fine-tune
+(100)
+Llama-3.1-8B-Instru
+ct
+QLoRA, 3 epochs 100
+examples
+0.30
+QLoRA fine-tune
+(500)
+Llama-3.1-8B-Instru
+ct
+QLoRA, 3 epochs 500
+examples
+0.34
+QLoRA fine-tune
+(1k)
+Llama-3.1-8B-Instru
+ct
+QLoRA, 3 epochs 1,000
+examples
+0.39
+QLoRA fine-tune
+(5k)
+Llama-3.1-8B-Instru
+ct
+QLoRA, 3 epochs 5,000
+examples
+0.85
+QLoRA fine-tune
+(full)
+Llama-3.1-8B-Instru
+ct
+QLoRA, 3 epochs ~27k
+examples
+3.04
+Eval sweep QLoRA checkpoints Batch inference Held-out test
+set
+0.35
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+Error analysis
+support
+QLoRA with
+baseline outputs
+Disagreement
+extraction
+30–50
+examples
+0.25
+Contingency — ~25% buffer — 4
+Total ~10
+We calibrated these estimates using a measured 1k-example QLoRA timing run on a single
+H200 GPU through Tillicum. The calibration run completed a 1-epoch fine-tuning pass in 1.58
+minutes wall-clock with 14.6 GB peak VRAM usage, corresponding to approximately 10.6
+examples/sec sustained throughput. These estimates are extrapolated from this measured
+calibration run rather than theoretical hardware assumptions.
+The storage estimate:
+Artifact Approx size
+Raw BEAD bias train and
+validation CSVs
+~10.5 MB
+Preprocessed / cleaned
+CSVs
+~10–25 MB
+Tokenized datasets ~50–200 MB
+QLoRA adapters/checkpoints ~1–5 GB
+Eval outputs, log, predictions ~100–500 MB
+Total peak ~6 GB
+5. Evaluation plan
+We will know it worked if our fine-tuned model demonstrates that supervised training adds
+measurable value over few-shot prompting at each data scale. The primary finding is the
+learning curve: how F1 changes as training set size increases from 100 examples to the full
+training split, and at what point fine-tuning meaningfully separates from the 3-shot baseline. A
+negative result here is reportable. A secondary finding is whether either LLM approach clears a
+meaningful threshold above the TF-IDF floor.
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+Metric
+We evaluate using F1, which balances precision and recall and is more informative than
+accuracy for binary classification. False positives and false negatives are not equally costly in a
+media literacy context, but we treat them as equally weighted and report precision and recall
+separately so the asymmetry is visible. The dataset is approximately balanced at 50.1%
+non-biased and 49.9% biased, so accuracy and F1 are expected to track closely. We report F1
+because it remains more sensitive to minority class performance if the distribution shifts on our
+held-out test set. We note the BEADS paper reports accuracy rather than F1, so our numbers
+are not directly comparable to their table (Raza et al., 2024).
+Loss function
+We train with standard next-token cross-entropy loss on the label token only. The gradient flows
+through that single position, which is a sparse signal for long inputs; for BEADS snippet lengths
+this is unlikely to be a meaningful constraint. The gap between cross-entropy training loss and
+F1 at evaluation is expected and standard in this formulation.
+F1 ceiling
+BEADS labels were produced through a hybrid GPT-4 plus expert review pipeline with a
+reported Cohen's Kappa of 0.67 between GPT-4 and human-verified labels (Raza et al., 2024).
+Bias detection is inherently subjective and the paper acknowledges this in its limitations. Any
+model's achievable F1 is bounded by this label noise, and we will acknowledge it when
+interpreting results. Our calibration surfaced a model behavior: after 1 epoch on 1000 examples
+the model predicted biased aggressively, producing 54 false positives against only 16 false
+negatives. This asymmetry may reflect label noise, prompt sensitivity, or insufficient training data
+rather than a stable decision boundary, and we will track it across training sizes in the full run.
+Target F1
+Our calibration run of 1 epoch on 1,000 examples produced a macro F1 of 0.646 and accuracy
+of 0.65 on a 200-example sample. This is an early signal only, representing 4% of available
+training data at a single epoch, not a target. The BEADS paper reports fine-tuned Llama2-7B
+reaching 0.77 accuracy on this dataset, which serves as a published decoder baseline for
+orientation. The TF-IDF and 3-shot prompting baselines will be run in Week 7 and the target F1
+will be finalized at that point relative to those measured numbers.
+Baselines
+TF-IDF with logistic regression, trained off-cluster, scikit-learn 1.4. To be run in Week 7.
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+3-shot prompting with Llama-3.1-8B, no fine-tuning, same prompt format and completion scoring
+procedure as the fine-tuned model. This isolates the contribution of supervision from the
+contribution of prompt format and model family. To be run in Week 7.
+Primary ablation
+The learning curve sweep across five training sizes (100, 500, 1k, 5k, full) directly answers
+whether fine-tuning adds value over few-shot prompting at each data scale.
+Qualitative inspection protocol
+We will sample 30 to 50 examples from the held-out test set drawn from cases where the
+fine-tuned model and at least one baseline disagree. We will independently apply the following
+criteria, with a consistency check on at least 10 examples before the full inspection.
+1. Does the text contain identifiable markers of bias such as loaded language, selective
+framing, or asymmetric attribution?
+2. Is the [gold label?] credible given the text, or does it appear to reflect annotator
+uncertainty?
+3. Is a confident model error more consistent with genuine model failure or a contestable
+label?
+4. Does the fine-tuned model's error pattern differ from the few-shot baseline's in a
+systematic way, for example by bias type or text length?
+Results will be reported alongside quantitative metrics to characterize where the model fails, not
+just whether it fails.
+6. Team plan
+Team members: Abrevaa, Ash, and Zach. All members are based in PST and some work
+part-time, so scheduling is coordinated flexibly around everyone's availability.
+Roles:
+● Abrevaa - Data Lead (co-lead: Coordination): Accountable for data acquisition, licensing
+verification, preprocessing pipeline, and train/validation/test splits. Not accountable for
+training runs or evaluation metric computation.
+● Zach - Training & Modeling Lead (co-lead: Data): Accountable for the QLoRA fine-tuning
+setup, Tillicum job scripts, hyperparameter decisions, run logs, and checkpoint
+management. Not accountable for evaluation harness or baseline implementation.
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+● Ash - Evaluation Lead & Coordination Lead: Accountable for TF-IDF and few-shot
+baselines, F1/precision/recall computation, learning curve analysis, qualitative inspection
+protocol, weekly written status updates, compute scheduling, and report assembly. Not
+accountable for training runs or preprocessing pipeline.
+Coordination: The team meets weekly on Thursdays after class, in-person or virtually
+depending on class format. Primary communication is via Teams with a same-day response
+expectation, or within 2 hours when an assignment deadline is imminent. Files are shared
+through a Google Drive folder. Meeting roles are Abrevaa as facilitator, Ash as note-taker, and
+Zach as timekeeper, rotating as needed. Decisions are made by consensus and by majority
+vote when consensus cannot be reached. Run tracking is handled through shared notes in
+Google Drive alongside Tillicum job logs.
+7. Timeline
+Week 7 (May 12-16) TF-IDF baseline trained off-cluster and 3-shot prompting baseline run on
+Tillicum. Full QLoRA fine-tune sweep across all five training sizes run on Tillicum. Decision
+point: if any training run diverges or fine-tuning fails to improve over the 3-shot baseline at any
+data size, the team meets to decide whether to adjust hyperparameters or reframe the work.
+Week 8 (May 19-23) Eval sweep run across all QLoRA checkpoints on the test set. Learning
+curve computed and compared against confirmed baselines from week 7. Target F1 finalized
+from measured baseline numbers. Qualitative inspection completed on 30 to 50 disagreement
+examples. Dependency: eval sweep cannot begin until Week 7 checkpoints are saved and
+confirmed.
+Week 9 (May 26-30) Full report draft completed and shared internally by Thursday. All sections
+peer reviewed before the end of week. Presentation slides drafted. Decision point: if results are
+weak or inconclusive, we’ll convene to align on framing before the report is finalized.
+Week 10 (Jun 2-5) Report finalized and submitted. Presentation delivered in final class.
+8. Risks
+1. Risk 1: Fine-tuning may provide only limited improvement over the 3-shot prompting
+baseline. BEAD labels were produced through a GPT-4 plus expert-review pipeline
+rather than independent human annotation, and the reported Cohen’s Kappa of 0.67
+indicates meaningful disagreement remains in some cases. Our calibration also surfaced
+asymmetric behavior, with the model over-predicting “biased” after one epoch on 1k
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+examples. If the learning curve flattens early or fine-tuned F1 remains close to the
+prompting baseline across all training sizes, the primary finding may be that supervised
+fine-tuning provides limited benefit for this task. Mitigation: The project is framed around
+comparative evaluation across training sizes rather than absolute benchmark
+performance, so a weak or flat learning curve is still a reportable result. Qualitative
+inspection will also be used to distinguish likely model failures from potentially
+contestable labels.
+2. The QLoRA training setup may not generalize cleanly from the initial calibration run.
+Larger runs could plateau, diverge, or collapse toward one class, compressing the
+evaluation timeline late in the quarter. Mitigation: The 100-example run serves as an
+explicit sanity check before launching larger runs. If instability appears, we will adjust
+hyperparameters before continuing and, if necessary, reduce the sweep to 100, 500, and
+1k examples.
+3. Temporary team-member unavailability during Weeks 7–10 could compress later project
+stages because the schedule has little slack. Mitigation: Each project area has a co-lead,
+shared logs and checkpoints are centrally maintained, and baseline evaluation runs in
+parallel with QLoRA training rather than sequentially.
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+References
+Raza, S., Rahman, M., & Zhang, M. R. (2024). BEADs: Bias Evaluation Across Domains.
+ArXiv.org. https://arxiv.org/abs/2406.04220
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+Appendix
+Run data
+Google Drive of 1k run
+Supporting files from the 1k calibration run are stored in the shared project folder under
+Appendix Artifacts / 1k calibration run. These include the Slurm .out log, run configuration
+JSON, evaluation metrics JSON, and any prediction summary files used to support the compute
+estimate and calibration discussion above.
+Team Contract
+Team Contract — Directions & Template
+A team contract formalizes how your group will work together. Writing it now lets you
+focus on the project for the rest of the quarter rather than renegotiating dynamics in the
+middle of a deadline.
+Adapted from the Centre for Teaching Excellence, University of Waterloo.
+What your contract must cover
+1. Members — names, contact info, preferred communication channel, availability /
+time-zone constraints.
+2. Ground rules — expectations for meeting attendance, preparation,
+responsiveness, and work quality. Aim for 5–7 specific rules, not platitudes.
+“Respond to Slack within 24 hours on weekdays” beats “communicate well”.
+3. Roles & strengths — individual strengths, desired growth areas, and the
+specific role each person owns on the project (see proposals.md §6 for framing on
+the kinds of responsibilities to cover — define the actual roles yourselves).
+4. Process for dealing with unmet expectations or other potential conflicts —
+spell out, concretely, what happens when someone misses a meeting, misses a
+deadline, disengages, or a disagreement stalls the group. This is the part that
+matters most when something goes wrong: the time to agree on the process is
+before you need it. Cover at minimum: how the issue is raised, who raises it,
+what the first response looks like (private conversation? group discussion?), what
+a second or third occurrence triggers, and what external escalation path exists
+(e.g. bringing it to the instructor).
+5. Peer-feedback cadence — how and when the team will give each other
+feedback before a final deliverable, so problems surface early.
+6. Sign-off — a line per member indicating agreement.
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+A good contract is specific enough to be the basis for a team-warning or team-removal
+decision if it comes to that. For example: rather than “show up to meetings”, write “if you
+can’t make a meeting, post in the team channel at least 4 hours ahead and propose a
+catch-up time — silent no-shows escalate after the second occurrence.”
+The template below is one format. You can restructure it, but the contract must address
+every bullet above and end with each member’s signature line.
+Team Contract
+Group # and/or name: Group 7
+1. Strengths & growth opportunities
+Member name Strengths Desired growth areas
+Abrevaa E. Prihutama Project management,
+data cleaning/prep
+Pipeline/flow building
+Ash Dhammani Communication, data
+wrangling,
+documentation
+Practical application of
+the ML/LL techniques
+we’ve learned in class
+Zachary Greenman Technical background in
+ML, model training, and
+data pipelines
+End-to-end pipeline
+design and improving
+collaboration on team
+project
+Each member’s strengths can include interpersonal skills (conflict resolution, facilitation,
+presenting) as well as technical skills (data wrangling, training infrastructure, writing). Soft-skill
+roles aren’t tied to a single task but help in ambiguous moments — these are highly transferable
+skills outside academia, so noting them here is encouraged.
+2. Goals, expectations, strategies, rules, consequences
+Goals — what are our group’s goals for how we accomplish our work?
+Simply put, our goal is to operate as an effective and efficient team.
+Expectations — what do we expect of one another regarding meeting attendance,
+participation, communication frequency, and work quality? Include contact info and preferred
+communication channel.
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+We will collaborate using shared documents through platforms like Google Drive and
+GitHub. If you are unable to attend a meeting, please give the group advance notice.
+Everyone is expected to contribute to discussions, and all members should respond
+promptly to group messages. Each person is expected to make a genuine effort on their
+assigned work; if you are struggling, reach out so the team can offer support. We will meet
+weekly at a set time, with additional ad hoc meetings scheduled as needed based on
+assignment deadlines. We will also aim to meet briefly after class when relevant. Our
+primary communication platform is Teams, and contact details have already been shared.
+Team success definition — how will we define success as a team, beyond grades? What
+qualities do we want our teamwork to demonstrate?
+Success means producing work we are genuinely proud of, i.e. something that functions well
+and reflects real effort. We will know we have succeeded as a team when we remain aligned
+throughout the process and are able to handle any disagreements professionally and
+constructively.
+Strategies — what strategies will we use to promote systems thinking, suspend assumptions,
+view each other as colleagues, and develop facilitation skills across the team? What methods of
+giving and receiving feedback will best support us?
+Every team member is expected to approach the work with an open mind, free from
+assumptions. We foster a culture where there are no dumb questions and no bad ideas.
+Feedback should be honest but always delivered constructively. To keep feedback
+actionable and well-documented, we will share it in written form through comments rather
+than verbally only.
+Team rules — what specific rules help us meet our goals and expectations? Be specific: if
+you agree to meet weekly at a fixed time, what should members do if a scheduling conflict
+arises? Do you want team assignments finalized ≥ 48 h before submission so there’s time
+to review?
+If a scheduling conflict arises, notify the team via Teams as soon as possible. All team
+assignments should be finalized at least one day before the submission deadline, with
+more lead time expected for larger or more complex assignments.
+Process for unmet expectations & conflict — how will we address non-performance or
+disagreement against these goals, expectations, and policies? Be specific — this is what
+the team falls back on when things go wrong, so generic answers (“we’ll talk about it”)
+aren’t enough. Address:
+● How is an issue first raised, and by whom?
+● What does a first response look like (private conversation? raised at the next meeting?
+written note?)
+● What happens on a second or third occurrence?
+● When and how do we escalate to the instructor?
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+● Note: a member can be removed from the team by the other members through the Team
+Warning & Removal Process.
+If an issue arises, it will be raised transparently and discussed openly as a group, with the goal
+of finding a path forward together. We will also consider whether other team members or the
+instructor might be a helpful source of support in resolving the situation. If the issue recurs and
+the support offered is not acted upon, the team will escalate to the instructor for guidance on
+next steps. Note that a member may be removed from the team through the formal Team
+Warning & Removal Process if the situation warrants it.
+3. Communication framework
+Communication aspect Team agreement
+Primary platform (Teams, Slack, Discord,
+group text, …)
+Teams
+Expected response time (e.g. within 12 h,
+same day, weekdays only)
+Same day; 2 hours if relating to assignment
+with an upcoming deadline
+Meeting notification requirements (e.g. 24 h
+notice, calendar invites)
+24 hour notice
+Protocol for unavoidable absences (how &
+when to notify the team)
+Prior to the meeting’s start time on Teams;
+ideally 2 hours before minimum
+File sharing & document management
+(e.g. Google Drive, GitHub, OneDrive)
+Shared Google Drive folder
+Updates between scheduled meetings
+(weekly status, standups, progress reports)
+Dependent on action items assigned;
+informally via Teams
+4. Meeting structure framework
+Meeting element Team agreement
+Regular meeting schedule (e.g. Mondays
+4–5 pm, twice weekly)
+Weekly after class on Thursdays
+Meeting format (in-person / virtual / hybrid,
+location)
+Depending on the class modality that day
+Meeting roles rotation (facilitator,
+note-taker, timekeeper)
+Facilitator - Abrevaa, Note-taker - Ash,
+Timekeeper - Zach; rotate as needed
+Agenda creation (e.g. shared doc, items
+added 24 h before)
+Action items for the following meeting will be
+pre-assigned/ discussed; agenda to be used as
+needed
+Decision-making approach (consensus,
+majority vote, consultation)
+Consensus in most cases, majority vote in
+conflicts
+Meeting documentation (where notes live,
+action-item tracking)
+Google Drive
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+5. Work process framework
+Process element Team agreement
+File naming conventions
+(e.g. ProjectName_DocumentType_MMDD_v#
+)
+#_Document Name
+Document version control (how changes are
+tracked and by whom)
+Changes tracked automatically via Google
+Docs
+Internal deadlines (e.g. 48 h before
+submission for final review)
+24 h before submission for review; more time
+for larger submissions
+Quality review process (peer review system,
+review checklist)
+Peer review
+Workload distribution method (equal division,
+skills-based, rotation)
+Equal division based on skills
+Progress tracking approach (task board,
+weekly check-ins, run log)
+Weekly check-ins
+6. Feedback framework
+Feedback element Team agreement
+Regular feedback schedule (after each
+deliverable, weekly, …)
+After an action item is done; during the
+weekly meetings at the very least
+Format for constructive feedback (written,
+verbal, structured)
+Verbal during meetings, written outside of it;
+any feedback shared verbally during
+meetings will also be written for
+documentation
+Process for addressing feedback received
+(acknowledgement, action plans)
+Acknowledgement + plan to implement
+Celebration of achievements (recognition of
+good work, milestones)
+Recognition of good work
+Weekly check-in method (standup format,
+progress updates)
+Meeting (virtual/in-person)
+7. Project-specific roles
+Decide as a team which ongoing responsibilities your project needs someone to own, name
+those roles yourselves, and record the assignments here. The shape of a project determines
+what roles make sense — a fine-tuning project and a RAG pipeline need different things — so
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+we don’t hand you a fixed menu. See proposals.md §6 for framing on the kinds of responsibilities
+to cover.
+Role (defined by
+team)
+Scope of
+responsibility Owner Backup / co-lead
+Data Acquisition, license /
+permissions,
+preprocessing,
+splits
+Abrevaa Zach
+Training/modeling Recipe, runs,
+hyperparameter
+search, run logs
+Zach Ash
+Evaluation Metrics, baselines,
+ablations, judge
+infra, qualitative
+inspection
+Ash Zach
+Coordination Timeline, compute
+scheduling, weekly
+written status,
+write-up / report
+Ash Abrevaa
+8. Additional sections
+Add any framework elements specific to your team that aren’t covered above — cultural norms,
+religious observances, shared values, working hours.
+None are currently applicable, but we are open to accommodating any reasonable adjustments
+as needed.
+Sign-off
+We share these goals and expectations and agree to the policies, procedures, and
+consequences above.
+Name in print (to act as signature) Date
+Abrevaa E. Prihutama Apr 30, 2026
+Ash Dhammani Apr 30, 2026
+Zachary Greenman Apr 30, 2026
+Abrevaa E. Prihutama, Ash Dhammani, and Zachary Greenman
+IMT 526 A
+Change Log (v2)
+This revision addresses all major feedback from the v1 proposal review. We added the required
+Team Plan, Timeline, Risks, and Team Contract sections; completed a Tillicum 1k-example
+QLoRA calibration run and rebuilt the compute table from measured wall-clock and VRAM
+results; clarified the architectural choice of Llama-3.1-8B and specified the prompt-based causal
+LM classification approach used for PEFT compatibility; reported BEAD class balance and
+inter-annotator agreement information; reframed the learning-curve sweep as the primary
+research question; operationalized the qualitative inspection protocol with explicit reviewer
+criteria; added a concrete calibration-based target F1 discussion; and included supporting run
+artifacts and logs in the appendix materials.

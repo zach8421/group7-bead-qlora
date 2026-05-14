@@ -1,0 +1,25 @@
+# Tillicum `llm` env (Python 3.12). These pins mirror the production env at
+# /gpfs/projects/imt526a/$USER/conda/envs/llm so local smoke runs and
+# Tillicum sweep runs see the same library behavior. See CLAUDE.md for the
+# full version rationale.
+
+numpy==2.4.3
+pandas==3.0.2
+scipy==1.17.1
+scikit-learn==1.8.0
+torch==2.11.0
+transformers==5.5.3
+tokenizers==0.22.2
+huggingface-hub==1.11.0
+datasets==4.8.4
+sentencepiece==0.2.1
+accelerate==1.13.0
+peft==0.19.1
+trl==1.3.0
+
+# Quantization — Linux/CUDA only. On macOS this pip-install fails; the
+# smoke-test code path doesn't need it (it uses a non-quantized tiny model).
+bitsandbytes==0.49.2; sys_platform == "linux"
+
+# Optional but useful for the class-notebook workflow (not required by the sweep).
+papermill==2.7.0

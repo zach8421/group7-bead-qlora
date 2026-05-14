@@ -1,0 +1,35 @@
+{
+  "seed": 42,
+  "source": "csv:data/bead",
+  "label_map": {
+    "0": "non-biased",
+    "1": "biased"
+  },
+  "splits": {
+    "train_1k": {
+      "n": 1000,
+      "label_0": 501,
+      "label_1": 499,
+      "pct_label_1": 0.499
+    },
+    "train_full": {
+      "n": 26263,
+      "label_0": 13151,
+      "label_1": 13112,
+      "pct_label_1": 0.4993
+    },
+    "val": {
+      "n": 8520,
+      "label_0": 4266,
+      "label_1": 4254,
+      "pct_label_1": 0.4993
+    },
+    "test_held_out": {
+      "n": 6816,
+      "label_0": 3413,
+      "label_1": 3403,
+      "pct_label_1": 0.4993
+    }
+  },
+  "test_frac_of_original_train": 0.2
+}

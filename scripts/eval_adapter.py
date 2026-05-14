@@ -1,0 +1,221 @@
+"""Evaluate a trained QLoRA adapter on the held-out BEAD test split.
+
+Approach
+--------
+For each test example we score the two completions ("biased" and
+"non-biased") under the same instruction prompt, conditional on the input,
+and pick the higher-likelihood label. This is fully deterministic, requires
+no sampling temperature tuning, and matches how we trained the model
+(prompt-completion SFT on those exact strings).
+
+Outputs
+-------
+* outputs/.../predictions.jsonl — one row per test example with text, gold,
+  predicted label, and per-class score.
+* outputs/.../eval_metrics.json  — accuracy, precision/recall/F1 for the
+  positive class plus macro F1.
+
+Smoke test
+----------
+  python scripts/eval_adapter.py \\
+      --adapter-path outputs/tillicum_1k_calibration/adapter_smoke \\
+      --test-jsonl data/processed_mock/test_held_out.jsonl \\
+      --max-test-rows 8 --smoke-test
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+from sklearn.metrics import (accuracy_score, classification_report, f1_score,
+                             precision_score, recall_score)
+
+
+SYSTEM_INSTRUCTION = (
+    "You are a careful annotator. Read the following statement and decide whether "
+    "it is biased or non-biased. Respond with exactly one word: either 'biased' or 'non-biased'."
+)
+LABEL_STRINGS = ["non-biased", "biased"]  # index = label_int
+
+
+def pick_device() -> torch.device:
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def load_jsonl(path: Path) -> list[dict]:
+    rows = []
+    with path.open() as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+def build_prompt(tokenizer, statement: str) -> str:
+    """Render the user prompt up to (but not including) the assistant's answer."""
+    messages = [
+        {"role": "system", "content": SYSTEM_INSTRUCTION},
+        {"role": "user", "content": f"Statement: {statement}"},
+    ]
+    return tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+
+
+def score_completion(model, tokenizer, prompt_text: str, completion_text: str, device) -> float:
+    """Return the summed log-prob of completion_text given prompt_text under the LM."""
+    full_text = prompt_text + completion_text
+    full_ids = tokenizer(full_text, return_tensors="pt", add_special_tokens=False).input_ids.to(device)
+    prompt_ids = tokenizer(prompt_text, return_tensors="pt", add_special_tokens=False).input_ids.to(device)
+    n_prompt = prompt_ids.shape[1]
+    with torch.no_grad():
+        logits = model(full_ids).logits  # (1, T, V)
+    # Shift: position t predicts token t+1. We want log p of tokens [n_prompt:].
+    log_probs = torch.log_softmax(logits[:, :-1, :], dim=-1)  # (1, T-1, V)
+    target_ids = full_ids[:, 1:]  # (1, T-1)
+    target_log_probs = log_probs.gather(2, target_ids.unsqueeze(-1)).squeeze(-1)  # (1, T-1)
+    # Completion token positions in target_log_probs are [n_prompt-1 : T-1].
+    completion_lp = target_log_probs[0, n_prompt - 1:].sum().item()
+    return completion_lp
+
+
+def load_for_eval(adapter_path: Path, base_model_name: str, smoke_test: bool):
+    """Load base model + adapter, with or without 4-bit."""
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from peft import PeftModel
+
+    device = pick_device()
+
+    if smoke_test or not torch.cuda.is_available():
+        # CPU/MPS path: full-precision tiny base model. Used in smoke tests.
+        print(f"[eval] Loading base model {base_model_name} (no quant) on {device}")
+        model = AutoModelForCausalLM.from_pretrained(base_model_name)
+        model.to(device)
+    else:
+        from transformers import BitsAndBytesConfig
+        compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=compute_dtype,
+            bnb_4bit_use_double_quant=True,
+        )
+        print(f"[eval] Loading base model {base_model_name} in 4-bit")
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model_name, quantization_config=bnb_config, device_map="auto",
+            torch_dtype=compute_dtype,
+        )
+
+    # Tokenizer can come from the adapter dir (we saved it during training).
+    tok_source = adapter_path if (adapter_path / "tokenizer_config.json").exists() else base_model_name
+    tokenizer = AutoTokenizer.from_pretrained(tok_source)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    if not getattr(tokenizer, "chat_template", None):
+        # Smoke test fallback (matches train_qlora_1k.py's smoke template).
+        tokenizer.chat_template = (
+            "{% for m in messages %}<|{{ m['role'] }}|>\n{{ m['content'] }}\n<|end|>\n{% endfor %}"
+            "{% if add_generation_prompt %}<|assistant|>\n{% endif %}"
+        )
+
+    print(f"[eval] Loading adapter from {adapter_path}")
+    model = PeftModel.from_pretrained(model, str(adapter_path))
+    model.eval()
+    return model, tokenizer, device
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--adapter-path", required=True)
+    ap.add_argument("--test-jsonl", default="data/frozen/test_held_out.jsonl")
+    ap.add_argument("--base-model", default="meta-llama/Llama-3.1-8B-Instruct")
+    ap.add_argument("--smoke-base-model", default="hf-internal-testing/tiny-random-LlamaForCausalLM")
+    ap.add_argument("--max-test-rows", type=int, default=0,
+                    help="If >0, evaluate only the first N rows. Useful for quick checks.")
+    ap.add_argument("--output-dir", default=None,
+                    help="Defaults to the adapter's parent directory")
+    ap.add_argument("--run-name", default=None,
+                    help="Optional short label; stamped into eval_metrics.json so the manifest can pick it up.")
+    ap.add_argument("--smoke-test", action="store_true")
+    args = ap.parse_args()
+
+    adapter_path = Path(args.adapter_path)
+    if not adapter_path.exists():
+        sys.exit(f"[eval] Adapter not found at {adapter_path}")
+    test_path = Path(args.test_jsonl)
+    if not test_path.exists():
+        sys.exit(f"[eval] Test JSONL not found at {test_path}")
+
+    rows = load_jsonl(test_path)
+    if args.max_test_rows > 0:
+        rows = rows[: args.max_test_rows]
+    print(f"[eval] Evaluating on {len(rows)} test rows")
+
+    base_model_name = args.smoke_base_model if args.smoke_test else args.base_model
+    model, tokenizer, device = load_for_eval(adapter_path, base_model_name, args.smoke_test)
+
+    output_dir = Path(args.output_dir) if args.output_dir else adapter_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    preds_path = output_dir / ("predictions_smoke.jsonl" if args.smoke_test else "predictions.jsonl")
+    metrics_path = output_dir / ("eval_metrics_smoke.json" if args.smoke_test else "eval_metrics.json")
+
+    gold, pred = [], []
+    t0 = time.perf_counter()
+    with preds_path.open("w") as fout:
+        for i, r in enumerate(rows):
+            prompt = build_prompt(tokenizer, r["text"])
+            scores = {}
+            for label in LABEL_STRINGS:
+                scores[label] = score_completion(model, tokenizer, prompt, label, device)
+            pred_label = max(scores, key=scores.get)
+            pred_int = LABEL_STRINGS.index(pred_label)
+            gold_int = int(r["label_int"])
+            gold.append(gold_int)
+            pred.append(pred_int)
+            fout.write(json.dumps({
+                "text": r["text"],
+                "gold_int": gold_int,
+                "gold_str": r["label_str"],
+                "pred_int": pred_int,
+                "pred_str": pred_label,
+                "score_non_biased": scores["non-biased"],
+                "score_biased": scores["biased"],
+            }) + "\n")
+            if (i + 1) % 50 == 0:
+                print(f"[eval] {i + 1}/{len(rows)}")
+    eval_sec = time.perf_counter() - t0
+
+    metrics = {
+        "run_name": args.run_name,
+        "n_examples": len(rows),
+        "accuracy": float(accuracy_score(gold, pred)),
+        "precision_pos": float(precision_score(gold, pred, pos_label=1, zero_division=0)),
+        "recall_pos": float(recall_score(gold, pred, pos_label=1, zero_division=0)),
+        "f1_pos": float(f1_score(gold, pred, pos_label=1, zero_division=0)),
+        "f1_macro": float(f1_score(gold, pred, average="macro", zero_division=0)),
+        "classification_report": classification_report(
+            gold, pred, target_names=LABEL_STRINGS, zero_division=0, digits=4
+        ),
+        "eval_seconds": round(eval_sec, 3),
+        "smoke_test": args.smoke_test,
+        "adapter_path": str(adapter_path),
+        "test_jsonl": str(test_path),
+    }
+    metrics_path.write_text(json.dumps(metrics, indent=2))
+    print(f"[eval] Wrote {metrics_path}")
+    print(json.dumps({k: v for k, v in metrics.items() if k != "classification_report"}, indent=2))
+    print(metrics["classification_report"])
+
+
+if __name__ == "__main__":
+    main()
