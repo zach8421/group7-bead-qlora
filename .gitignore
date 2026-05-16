@@ -50,6 +50,9 @@ logs/*
 *.zip
 terminal output*.txt
 tillicum-1k-calibration-2026-05-09/
+# Third-party reference clone (its own git repo at UWrc/tillicum-onboarding-imt526a).
+# Kept locally for reading; not part of this project's history.
+tillicum-onboarding-imt526a/
 
 # checkpoints/ is a placeholder dir from the calibration layout; keep the
 # directory but ignore anything written into it. (`.gitkeep` will be tracked.)
