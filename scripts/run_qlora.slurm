@@ -30,6 +30,7 @@ PER_DEVICE_BS="${PER_DEVICE_BS:-4}"
 GRAD_ACCUM="${GRAD_ACCUM:-4}"
 MAX_SEQ_LEN="${MAX_SEQ_LEN:-512}"
 EVAL_ROWS="${EVAL_ROWS:-0}"  # 0 = full test_held_out (6816); >0 = subset (smoke)
+EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"  # sequences per forward; 2 per test row
 
 case "$SIZE" in
   100)   TRAIN_FILE="data/frozen/train_100.jsonl" ;;
@@ -139,7 +140,8 @@ echo "[slurm] Evaluating $RUN_NAME on $TEST_FILE ..."
 EVAL_ARGS=( --adapter-path "$OUTPUT_DIR/adapter" \
             --test-jsonl "$TEST_FILE" \
             --output-dir "$OUTPUT_DIR" \
-            --run-name "$RUN_NAME" )
+            --run-name "$RUN_NAME" \
+            --eval-batch-size "$EVAL_BATCH_SIZE" )
 if [[ "$EVAL_ROWS" -gt 0 ]]; then
   EVAL_ARGS+=( --max-test-rows "$EVAL_ROWS" )
 fi

@@ -29,7 +29,8 @@ baseline. Targets run on a single H200 via UW's Tillicum cluster.
 │   └── frozen/                            # splits_manifest.json is tracked; the JSONLs are gitignored and regenerable
 ├── docs/
 │   ├── proposal_v2.txt                    # the May 9 Project Proposal v2 (full narrative)
-│   └── v1_calibration_writeup.md          # the May 9 calibration run writeup
+│   ├── v1_calibration_writeup.md          # the May 9 calibration run writeup
+│   └── build_log.md                       # running log of architecturally meaningful changes (source material for the final writeup)
 ├── outputs/
 │   └── tillicum_1k_calibration/           # v1 metrics + predictions (adapter weights gitignored)
 └── logs/                                  # Slurm stdout/stderr (gitignored content; dir kept)

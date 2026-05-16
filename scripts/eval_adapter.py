@@ -8,10 +8,19 @@ and pick the higher-likelihood label. This is fully deterministic, requires
 no sampling temperature tuning, and matches how we trained the model
 (prompt-completion SFT on those exact strings).
 
+Scoring is batched: every test row produces two padded sequences
+(prompt + "biased", prompt + "non-biased"), and `--eval-batch-size` of
+those sequences are forwarded together. With right-padding + attention
+mask, the per-token log-probs at real (non-pad) completion positions are
+numerically equivalent to a batch-size-1 forward up to bf16 reduction
+order. In practice the argmax over the two labels is stable; if you need
+bit-identical predictions to a previous batch-1 run you can set
+`--eval-batch-size 1`.
+
 Outputs
 -------
 * outputs/.../predictions.jsonl — one row per test example with text, gold,
-  predicted label, and per-class score.
+  predicted label, and per-class summed log-likelihood.
 * outputs/.../eval_metrics.json  — accuracy, precision/recall/F1 for the
   positive class plus macro F1.
 
@@ -30,7 +39,6 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import torch
 from sklearn.metrics import (accuracy_score, classification_report, f1_score,
                              precision_score, recall_score)
@@ -72,21 +80,85 @@ def build_prompt(tokenizer, statement: str) -> str:
     )
 
 
-def score_completion(model, tokenizer, prompt_text: str, completion_text: str, device) -> float:
-    """Return the summed log-prob of completion_text given prompt_text under the LM."""
-    full_text = prompt_text + completion_text
-    full_ids = tokenizer(full_text, return_tensors="pt", add_special_tokens=False).input_ids.to(device)
-    prompt_ids = tokenizer(prompt_text, return_tensors="pt", add_special_tokens=False).input_ids.to(device)
-    n_prompt = prompt_ids.shape[1]
-    with torch.no_grad():
-        logits = model(full_ids).logits  # (1, T, V)
-    # Shift: position t predicts token t+1. We want log p of tokens [n_prompt:].
-    log_probs = torch.log_softmax(logits[:, :-1, :], dim=-1)  # (1, T-1, V)
-    target_ids = full_ids[:, 1:]  # (1, T-1)
-    target_log_probs = log_probs.gather(2, target_ids.unsqueeze(-1)).squeeze(-1)  # (1, T-1)
-    # Completion token positions in target_log_probs are [n_prompt-1 : T-1].
-    completion_lp = target_log_probs[0, n_prompt - 1:].sum().item()
-    return completion_lp
+def prepare_scoring_items(tokenizer, rows: list[dict]) -> list[dict]:
+    """Tokenize each row once into per-(row, label) scoring items.
+
+    Returns one item per (row_idx, label) with `input_ids` (list[int]) and
+    `prompt_len` (int, number of prompt tokens — the same across both labels
+    for a given row). Tokenizing the prompt once per row instead of once per
+    (row, label) drops a redundant pass; the full prompt+label string is
+    still tokenized per item so BPE boundary effects between the prompt's
+    final token and the label's leading token are preserved exactly as in
+    the batch-size-1 path.
+    """
+    items: list[dict] = []
+    for row_idx, row in enumerate(rows):
+        prompt = build_prompt(tokenizer, row["text"])
+        prompt_ids = tokenizer(prompt, add_special_tokens=False).input_ids
+        prompt_len = len(prompt_ids)
+        for label_idx, label in enumerate(LABEL_STRINGS):
+            full_ids = tokenizer(prompt + label, add_special_tokens=False).input_ids
+            items.append({
+                "row_idx": row_idx,
+                "label_idx": label_idx,
+                "input_ids": full_ids,
+                "prompt_len": prompt_len,
+            })
+    return items
+
+
+def score_items_batched(model, tokenizer, items: list[dict], device, batch_size: int) -> torch.Tensor:
+    """Forward every (row, label) item through the model in batches; return a
+    1-D tensor of summed completion log-probs (on CPU), aligned to `items`.
+
+    Right-pads sequences in each batch with `tokenizer.pad_token_id`, builds
+    the attention mask, runs one forward per batch under `inference_mode`,
+    gathers per-token log-probs at the completion positions only, and keeps
+    the result on the GPU until the entire eval is done — one CPU sync at
+    the end instead of one per row.
+    """
+    pad_id = tokenizer.pad_token_id
+    n = len(items)
+    out_scores = torch.empty(n, dtype=torch.float32, device=device)
+
+    for start in range(0, n, batch_size):
+        chunk = items[start: start + batch_size]
+        B = len(chunk)
+        max_len = max(len(it["input_ids"]) for it in chunk)
+        input_ids = torch.full((B, max_len), pad_id, dtype=torch.long)
+        attention_mask = torch.zeros((B, max_len), dtype=torch.long)
+        for j, it in enumerate(chunk):
+            ids = it["input_ids"]
+            L = len(ids)
+            input_ids[j, :L] = torch.tensor(ids, dtype=torch.long)
+            attention_mask[j, :L] = 1
+        input_ids = input_ids.to(device)
+        attention_mask = attention_mask.to(device)
+
+        with torch.inference_mode():
+            logits = model(input_ids=input_ids, attention_mask=attention_mask).logits  # (B, T, V)
+
+        # Position t predicts token t+1. We want the log-probs at positions
+        # [prompt_len-1 .. seq_len-2] aiming at tokens [prompt_len .. seq_len-1].
+        log_probs = torch.log_softmax(logits[:, :-1, :].float(), dim=-1)   # (B, T-1, V)
+        target_ids = input_ids[:, 1:]                                       # (B, T-1)
+        token_lp = log_probs.gather(2, target_ids.unsqueeze(-1)).squeeze(-1)  # (B, T-1)
+
+        # Build a (B, T-1) boolean mask that's True only at completion positions.
+        positions = torch.arange(max_len - 1, device=device).unsqueeze(0).expand(B, -1)
+        prompt_lens = torch.tensor([it["prompt_len"] for it in chunk], device=device)
+        seq_lens = torch.tensor([len(it["input_ids"]) for it in chunk], device=device)
+        comp_mask = (positions >= (prompt_lens.unsqueeze(1) - 1)) & (positions < (seq_lens.unsqueeze(1) - 1))
+
+        batch_scores = (token_lp * comp_mask).sum(dim=1)  # (B,)
+        out_scores[start: start + B] = batch_scores
+
+        # Progress: roughly each "row" is 2 items, so divide by 2 for a row count.
+        rows_done = (start + B + 1) // 2
+        if rows_done % 200 == 0 or start + B == n:
+            print(f"[eval] ~{rows_done} rows scored ({start + B}/{n} items)")
+
+    return out_scores.detach().to("cpu")
 
 
 def load_for_eval(adapter_path: Path, base_model_name: str, smoke_test: bool):
@@ -95,6 +167,7 @@ def load_for_eval(adapter_path: Path, base_model_name: str, smoke_test: bool):
     from peft import PeftModel
 
     device = pick_device()
+    t0 = time.perf_counter()
 
     if smoke_test or not torch.cuda.is_available():
         # CPU/MPS path: full-precision tiny base model. Used in smoke tests.
@@ -112,7 +185,9 @@ def load_for_eval(adapter_path: Path, base_model_name: str, smoke_test: bool):
         )
         print(f"[eval] Loading base model {base_model_name} in 4-bit")
         model = AutoModelForCausalLM.from_pretrained(
-            base_model_name, quantization_config=bnb_config, device_map="auto",
+            base_model_name,
+            quantization_config=bnb_config,
+            device_map={"": 0},
             torch_dtype=compute_dtype,
         )
 
@@ -122,7 +197,7 @@ def load_for_eval(adapter_path: Path, base_model_name: str, smoke_test: bool):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if not getattr(tokenizer, "chat_template", None):
-        # Smoke test fallback (matches train_qlora_1k.py's smoke template).
+        # Smoke test fallback (matches train_qlora.py's smoke template).
         tokenizer.chat_template = (
             "{% for m in messages %}<|{{ m['role'] }}|>\n{{ m['content'] }}\n<|end|>\n{% endfor %}"
             "{% if add_generation_prompt %}<|assistant|>\n{% endif %}"
@@ -131,6 +206,7 @@ def load_for_eval(adapter_path: Path, base_model_name: str, smoke_test: bool):
     print(f"[eval] Loading adapter from {adapter_path}")
     model = PeftModel.from_pretrained(model, str(adapter_path))
     model.eval()
+    print(f"[eval] Model + adapter ready in {time.perf_counter() - t0:.1f}s")
     return model, tokenizer, device
 
 
@@ -142,6 +218,9 @@ def main():
     ap.add_argument("--smoke-base-model", default="hf-internal-testing/tiny-random-LlamaForCausalLM")
     ap.add_argument("--max-test-rows", type=int, default=0,
                     help="If >0, evaluate only the first N rows. Useful for quick checks.")
+    ap.add_argument("--eval-batch-size", type=int, default=16,
+                    help="Sequences per forward pass. Each test row produces 2 sequences "
+                         "(one per label), so the actual minibatch is this value. Default 16.")
     ap.add_argument("--output-dir", default=None,
                     help="Defaults to the adapter's parent directory")
     ap.add_argument("--run-name", default=None,
@@ -159,7 +238,7 @@ def main():
     rows = load_jsonl(test_path)
     if args.max_test_rows > 0:
         rows = rows[: args.max_test_rows]
-    print(f"[eval] Evaluating on {len(rows)} test rows")
+    print(f"[eval] Evaluating on {len(rows)} test rows  (eval_batch_size={args.eval_batch_size})")
 
     base_model_name = args.smoke_base_model if args.smoke_test else args.base_model
     model, tokenizer, device = load_for_eval(adapter_path, base_model_name, args.smoke_test)
@@ -169,16 +248,32 @@ def main():
     preds_path = output_dir / ("predictions_smoke.jsonl" if args.smoke_test else "predictions.jsonl")
     metrics_path = output_dir / ("eval_metrics_smoke.json" if args.smoke_test else "eval_metrics.json")
 
-    gold, pred = [], []
     t0 = time.perf_counter()
+    print(f"[eval] Tokenizing {len(rows)} rows × {len(LABEL_STRINGS)} labels ...")
+    items = prepare_scoring_items(tokenizer, rows)
+    print(f"[eval] Tokenization done in {time.perf_counter() - t0:.1f}s; running {len(items)} forwards "
+          f"across {(len(items) + args.eval_batch_size - 1) // args.eval_batch_size} batches")
+
+    t_fwd = time.perf_counter()
+    scores_flat = score_items_batched(model, tokenizer, items, device, args.eval_batch_size)
+    fwd_sec = time.perf_counter() - t_fwd
+    print(f"[eval] Forward passes done in {fwd_sec:.1f}s "
+          f"({len(items) / max(fwd_sec, 1e-9):.1f} seq/s, "
+          f"{len(rows) / max(fwd_sec, 1e-9):.1f} rows/s)")
+
+    # Reshape: items are in (row, label) order, two per row.
+    scores_per_row = scores_flat.view(len(rows), len(LABEL_STRINGS)).tolist()
+    label_to_idx = {lab: i for i, lab in enumerate(LABEL_STRINGS)}
+    non_biased_idx = label_to_idx["non-biased"]
+    biased_idx = label_to_idx["biased"]
+
+    gold, pred = [], []
     with preds_path.open("w") as fout:
         for i, r in enumerate(rows):
-            prompt = build_prompt(tokenizer, r["text"])
-            scores = {}
-            for label in LABEL_STRINGS:
-                scores[label] = score_completion(model, tokenizer, prompt, label, device)
-            pred_label = max(scores, key=scores.get)
-            pred_int = LABEL_STRINGS.index(pred_label)
+            s_nb = scores_per_row[i][non_biased_idx]
+            s_b = scores_per_row[i][biased_idx]
+            pred_int = 1 if s_b >= s_nb else 0
+            pred_label = LABEL_STRINGS[pred_int]
             gold_int = int(r["label_int"])
             gold.append(gold_int)
             pred.append(pred_int)
@@ -188,11 +283,9 @@ def main():
                 "gold_str": r["label_str"],
                 "pred_int": pred_int,
                 "pred_str": pred_label,
-                "score_non_biased": scores["non-biased"],
-                "score_biased": scores["biased"],
+                "score_non_biased": s_nb,
+                "score_biased": s_b,
             }) + "\n")
-            if (i + 1) % 50 == 0:
-                print(f"[eval] {i + 1}/{len(rows)}")
     eval_sec = time.perf_counter() - t0
 
     metrics = {
@@ -207,6 +300,8 @@ def main():
             gold, pred, target_names=LABEL_STRINGS, zero_division=0, digits=4
         ),
         "eval_seconds": round(eval_sec, 3),
+        "eval_forward_seconds": round(fwd_sec, 3),
+        "eval_batch_size": args.eval_batch_size,
         "smoke_test": args.smoke_test,
         "adapter_path": str(adapter_path),
         "test_jsonl": str(test_path),
