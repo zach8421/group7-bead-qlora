@@ -10,12 +10,15 @@ no sampling temperature tuning, and matches how we trained the model
 
 Scoring is batched: every test row produces two padded sequences
 (prompt + "biased", prompt + "non-biased"), and `--eval-batch-size` of
-those sequences are forwarded together. With right-padding + attention
-mask, the per-token log-probs at real (non-pad) completion positions are
-numerically equivalent to a batch-size-1 forward up to bf16 reduction
-order. In practice the argmax over the two labels is stable; if you need
-bit-identical predictions to a previous batch-1 run you can set
-`--eval-batch-size 1`.
+those sequences are forwarded together. After the forward, each row's
+logits are sliced down to just the completion positions before
+log-softmax is applied, so peak memory is bounded by the model's logits
+tensor instead of a `(B, T-1, V)` fp32 intermediate. With right-padding
++ attention mask, the per-token log-probs at real (non-pad) completion
+positions are numerically equivalent to a batch-size-1 forward up to
+bf16 reduction order. In practice the argmax over the two labels is
+stable; if you need bit-identical predictions to a previous batch-1 run
+you can set `--eval-batch-size 1`.
 
 Outputs
 -------
@@ -113,9 +116,12 @@ def score_items_batched(model, tokenizer, items: list[dict], device, batch_size:
 
     Right-pads sequences in each batch with `tokenizer.pad_token_id`, builds
     the attention mask, runs one forward per batch under `inference_mode`,
-    gathers per-token log-probs at the completion positions only, and keeps
-    the result on the GPU until the entire eval is done — one CPU sync at
-    the end instead of one per row.
+    and for each batch element slices the model output down to just the
+    completion-position rows before computing log-probs. Avoiding the full
+    `(B, T-1, V)` log_softmax materialization keeps peak memory bounded by
+    the model's own logits tensor (`(B, T, V)` in bf16) — without this,
+    bs=64 at max_seq_length=512 OOMs trying to allocate a ~17 GB fp32
+    intermediate on top of the bf16 cast.
     """
     pad_id = tokenizer.pad_token_id
     n = len(items)
@@ -138,20 +144,23 @@ def score_items_batched(model, tokenizer, items: list[dict], device, batch_size:
         with torch.inference_mode():
             logits = model(input_ids=input_ids, attention_mask=attention_mask).logits  # (B, T, V)
 
-        # Position t predicts token t+1. We want the log-probs at positions
-        # [prompt_len-1 .. seq_len-2] aiming at tokens [prompt_len .. seq_len-1].
-        log_probs = torch.log_softmax(logits[:, :-1, :].float(), dim=-1)   # (B, T-1, V)
-        target_ids = input_ids[:, 1:]                                       # (B, T-1)
-        token_lp = log_probs.gather(2, target_ids.unsqueeze(-1)).squeeze(-1)  # (B, T-1)
-
-        # Build a (B, T-1) boolean mask that's True only at completion positions.
-        positions = torch.arange(max_len - 1, device=device).unsqueeze(0).expand(B, -1)
-        prompt_lens = torch.tensor([it["prompt_len"] for it in chunk], device=device)
-        seq_lens = torch.tensor([len(it["input_ids"]) for it in chunk], device=device)
-        comp_mask = (positions >= (prompt_lens.unsqueeze(1) - 1)) & (positions < (seq_lens.unsqueeze(1) - 1))
-
-        batch_scores = (token_lp * comp_mask).sum(dim=1)  # (B,)
-        out_scores[start: start + B] = batch_scores
+        # Slice each row down to completion positions before computing log-probs.
+        # Position t in logits predicts token t+1. The completion tokens live at
+        # input_ids[prompt_len : seq_len], so we read logits at positions
+        # [prompt_len-1 : seq_len-1] and target tokens from input_ids at
+        # [prompt_len : seq_len]. n_comp per row is typically 1–3 tokens
+        # ("biased" or "non-biased"), so each slice is a tiny (n_comp, V)
+        # tensor — fp32 cast + log-softmax math is essentially free.
+        for j, it in enumerate(chunk):
+            prompt_len = it["prompt_len"]
+            seq_len = len(it["input_ids"])
+            comp_logits = logits[j, prompt_len - 1: seq_len - 1, :].float()    # (n_comp, V)
+            comp_targets = input_ids[j, prompt_len: seq_len]                    # (n_comp,)
+            comp_log_z = torch.logsumexp(comp_logits, dim=-1)                   # (n_comp,)
+            comp_target_logits = comp_logits.gather(
+                1, comp_targets.unsqueeze(-1)
+            ).squeeze(-1)                                                       # (n_comp,)
+            out_scores[start + j] = (comp_target_logits - comp_log_z).sum()
 
         # Progress: roughly each "row" is 2 items, so divide by 2 for a row count.
         rows_done = (start + B + 1) // 2
