@@ -126,9 +126,21 @@ def load_existing_csv(path: Path) -> dict[str, dict]:
     return out
 
 
+def _train_size_int(r: dict) -> int:
+    # CSV round-trip stringifies everything, freshly-built rows are ints — coerce
+    # so the sort key doesn't TypeError when both shapes coexist mid-rebuild.
+    ts = r.get("train_size")
+    if ts is None or ts == "":
+        return 0
+    try:
+        return int(ts)
+    except (ValueError, TypeError):
+        return 0
+
+
 def write_csv(path: Path, rows: dict[str, dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    ordered = sorted(rows.values(), key=lambda r: (r.get("train_size") or 0, r.get("run_name") or ""))
+    ordered = sorted(rows.values(), key=lambda r: (_train_size_int(r), r.get("run_name") or ""))
     with path.open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
         w.writeheader()
