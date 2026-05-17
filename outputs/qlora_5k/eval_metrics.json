@@ -1,0 +1,16 @@
+{
+  "run_name": "qlora_5k",
+  "n_examples": 6816,
+  "accuracy": 0.758362676056338,
+  "precision_pos": 0.7605341246290801,
+  "recall_pos": 0.7531589773729063,
+  "f1_pos": 0.7568285840838624,
+  "f1_macro": 0.7583530586259815,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.7562    0.7636    0.7599      3413\n      biased     0.7605    0.7532    0.7568      3403\n\n    accuracy                         0.7584      6816\n   macro avg     0.7584    0.7584    0.7584      6816\nweighted avg     0.7584    0.7584    0.7584      6816\n",
+  "eval_seconds": 180.381,
+  "eval_forward_seconds": 176.44,
+  "eval_batch_size": 16,
+  "smoke_test": false,
+  "adapter_path": "outputs/qlora_5k/adapter",
+  "test_jsonl": "data/frozen/test_held_out.jsonl"
+}

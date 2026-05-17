@@ -1,10 +1,10 @@
 {
-  "run_name": "qlora_100",
+  "run_name": "qlora_500",
   "smoke_test": false,
   "args": {
-    "train_jsonl": "data/frozen/train_100.jsonl",
-    "output_dir": "outputs/qlora_100",
-    "run_name": "qlora_100",
+    "train_jsonl": "data/frozen/train_500.jsonl",
+    "output_dir": "outputs/qlora_500",
+    "run_name": "qlora_500",
     "splits_manifest": "data/frozen/splits_manifest.json",
     "model_name": "meta-llama/Llama-3.1-8B-Instruct",
     "smoke_model_name": "hf-internal-testing/tiny-random-LlamaForCausalLM",
@@ -20,13 +20,13 @@
     "smoke_test": false,
     "max_train_rows": 0
   },
-  "started_at": "2026-05-16T21:06:17.900336+00:00",
-  "finished_at": "2026-05-16T21:06:45.859257+00:00",
-  "wall_clock_sec": 27.959,
+  "started_at": "2026-05-16T21:06:18.011377+00:00",
+  "finished_at": "2026-05-16T21:08:22.944932+00:00",
+  "wall_clock_sec": 124.934,
   "host": {
     "hostname": "g006",
     "platform": "Linux-5.14.0-611.54.1.el9_7.x86_64-x86_64-with-glibc2.34",
-    "slurm_job_id": "117767",
+    "slurm_job_id": "117768",
     "slurm_node": "g006",
     "cuda_visible_devices": "0"
   },
@@ -44,8 +44,8 @@
   },
   "git_head": null,
   "inputs": {
-    "train_jsonl": "data/frozen/train_100.jsonl",
-    "train_jsonl_sha256": "09681c11a099daf959531acc743bdb74130104ada4ee9924ed27fa34182311f5",
+    "train_jsonl": "data/frozen/train_500.jsonl",
+    "train_jsonl_sha256": "5575a832ea4a9d93e7b31768cd6944e1e4d756423faa5ff6fc31114cbc20552c",
     "splits_manifest": "data/frozen/splits_manifest.json",
     "splits_manifest_sha256": "3013f0983d6fdc8a00f7bcc3dca15c09e2a33ae4c4cd227204d23653cf512c2d",
     "splits_label_map": {
@@ -54,8 +54,8 @@
     }
   },
   "outputs": {
-    "adapter_path": "outputs/qlora_100/adapter",
-    "train_metrics": "outputs/qlora_100/train_metrics.json"
+    "adapter_path": "outputs/qlora_500/adapter",
+    "train_metrics": "outputs/qlora_500/train_metrics.json"
   },
   "model": {
     "model_name": "meta-llama/Llama-3.1-8B-Instruct",

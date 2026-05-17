@@ -9,6 +9,198 @@ use the `run_meta.json` files in `outputs/<run>/`.
 
 ---
 
+## 2026-05-16 — Full sweep complete (qlora_100 → qlora_full)
+
+**What ran**
+
+All five v2 sweep runs launched in parallel on Tillicum node g006 (8× H200,
+each job got its own GPU). Jobs `117767`–`117771`. EVAL_BATCH_SIZE=16
+(default) for all five.
+
+**Headline result — the learning curve**
+
+| Train rows | Accuracy | F1_macro | F1_pos | Prec_pos | Recall_pos | Train wall | Slurm |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 0.4991 | 0.3337 | 0.6657 | 0.4992 | 0.9988 | 0.5 min | 117767 |
+| 500 | 0.6844 | 0.6817 | 0.7111 | 0.6549 | 0.7778 | 2.1 min | 117768 |
+| 1,000 | 0.6981 | 0.6975 | 0.7108 | 0.6811 | 0.7432 | 4.1 min | 117769 |
+| 5,000 | 0.7584 | 0.7584 | 0.7568 | 0.7605 | 0.7532 | 18.6 min | 117770 |
+| 27,263 | **0.8036** | **0.8035** | 0.8024 | 0.8059 | 0.7990 | 99.3 min | 117771 |
+
+Per-run metrics live in `outputs/qlora_<size>/eval_metrics.json` and
+`train_metrics.json`. The consolidated manifest is at
+[outputs/manifest.csv](../outputs/manifest.csv) /
+[outputs/manifest.json](../outputs/manifest.json).
+
+**What this means**
+
+- **`qlora_full` reaches 0.804 accuracy / 0.804 F1_macro** on the 6,816-row
+  held-out test set. That clears the BEAD paper's reported Llama2-7B
+  baseline of 0.77 accuracy (Raza et al., 2024) by ~3 points. Headline
+  number for the writeup.
+- **Returns are still climbing at the right edge of the curve.**
+  100→500 gives +0.185 accuracy, 500→1k gives +0.014, 1k→5k +0.060,
+  5k→full +0.045. The 1k→5k and 5k→full deltas are similar in size, so
+  more data would plausibly still help. Not yet in the diminishing-returns
+  regime by the time the BEAD training split is exhausted.
+- **The over-predict-biased asymmetry is a low-data phenomenon, not a
+  permanent feature.** Precision/recall asymmetry resolves cleanly with
+  scale: at 100 we have P 0.50 / R 1.00 (degenerate collapse), at 500
+  P 0.65 / R 0.78, at 5k P 0.76 / R 0.75, at full P 0.81 / R 0.80
+  (balanced). The proposal's Risk #1 ("model over-predicting biased after
+  1 epoch on 1k") is now contextualized — it's a data-quantity artifact,
+  not a stable decision boundary.
+- **The 100-row collapse is reproducible.** Across the calibration sweep
+  and the canonical run, all qlora_100 instances landed at ~0.499 accuracy
+  with recall_pos > 0.998. Useful left-anchor for the curve.
+
+**Calibration math sanity**
+
+Sustained training throughput converged to ~13.7 ex/s on H200 with
+gradient checkpointing — better than the v1 calibration's 10.6 ex/s
+extrapolation. Training wall scaled almost exactly linearly with example
+count (100→0.5 min, full→99.3 min ≈ 100×). Peak VRAM was 14.6 GB across
+all runs ≥ 500, matching the calibration prediction. The proposal's
+H200-hours budget was generous by ~1.8× on the train side.
+
+**Eval wall held steady at ~180 s per run** at bs=16 (vs the original
+864 s before the refactor) — the calibration result transfers cleanly
+across sweep sizes since they all evaluate the same test set.
+
+**Open follow-ups**
+
+- TF-IDF baseline (Abrevaa) is in `TF-IDF baseline/` locally but not yet
+  committed; needs a directory rename before commit (space in name).
+- 3-shot Llama-3.1-8B prompting baseline still paused pending Prof. Harker's
+  guidance on label-quality concerns surfaced during inspection.
+- Learning-curve plot + qualitative inspection on 30–50 disagreement examples
+  are Week 8 deliverables.
+- The bigger structural eval-perf win — length-sorted batching — is
+  unblocked but not implemented. See [[2026-05-16-calibration]]; the
+  measured ceiling for random-order batches is ~180 s and we don't need
+  faster than that for the remaining work.
+
+---
+
+## 2026-05-16 — Eval-batch-size calibration + completion-only scoring (OOM fix)
+
+**Calibration sweep on qlora_100**
+
+After the batched-scoring refactor (entry below), ran a four-point
+sweep over `EVAL_BATCH_SIZE` against the qlora_100 adapter to find the
+optimal batch size before launching the bigger sweeps.
+
+| Slurm | bs | Forward (s) | rows/s | per-item (ms) | Result |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 117680 | 16 | 181.9 | 37.5 | 13.3 | baseline (post-refactor) |
+| 117738 | 32 | 199.2 | 34.2 | 14.6 | slower than bs=16 |
+| 117756 | 64 | — | — | — | **OOM (87 GB allocation)** |
+| 117761 | 32 | 196.1 | 34.8 | 14.4 | post-OOM-patch, still slower |
+| 117762 | 64 | 226.2 | 30.1 | 16.6 | slower again |
+
+**Finding: per-item cost grows monotonically with batch size.** The H200
+is fully compute-saturated at bs=16. Going bigger just invites more
+padding waste — BEAD texts vary widely in length, so larger batches
+right-pad to longer max-in-batch values and waste more compute on pad
+tokens. bs=16 is the optimal point for the **current random-order
+batching** code path.
+
+**OOM fix — completion-only scoring**
+
+The bs=64 run (slurm 117756) crashed with `torch.OutOfMemoryError`
+trying to allocate 87.12 GB at this line in `score_items_batched`:
+
+```python
+log_probs = torch.log_softmax(logits[:, :-1, :].float(), dim=-1)  # (B, T-1, V)
+```
+
+Root cause: the original refactor materialized a full `(B, T-1, V)`
+fp32 log-softmax tensor over the entire sequence even though we only
+needed log-probs at the 1–3 completion-token positions per row. At bs=64,
+max_seq_length=512, V=128,256: that tensor alone is 16.8 GB, and the
+upstream `.float()` cast plus the gather staging push the allocation
+chain to 87 GB.
+
+**Fix (commit `d1aa8e4`)**: slice logits to the completion positions
+**per row** before computing log-probs. Each slice is `(n_comp, V)` with
+n_comp typically 1–3, so the fp32 cast + logsumexp math costs effectively
+nothing. Peak eval memory is now bounded by the model's own `(B, T, V)`
+bf16 logits output (~17 GB at bs=128, fine on a 141 GB H200).
+
+Math is identical:
+`log p(target | context) = logit[target] - logsumexp(logits)`. We compute
+this on the small completion slice; the full-vocab reduction still
+happens (it's how you normalize a distribution) but only at completion
+positions.
+
+**Verification**: local fp32 smoke flow on tiny-Llama (20 rows) showed
+20/20 prediction matches between bs=1 and bs=16 with score deltas at
+3.8e-06 — float32 reduction noise from a different kernel path
+(`logsumexp + gather` vs `log_softmax`), nowhere near anything that
+flips a prediction. On Tillicum at bf16 the metrics drift across the
+three qlora_100 runs (0.4990 / 0.4994 / 0.4990) is entirely from
+training non-determinism, not the eval path.
+
+**Lesson worth remembering**
+
+My first refactor (batching) optimized the per-row scoring loop but left
+the per-batch math memory-naive. A peer agent flagged the issue
+("score only the completion tokens instead of computing log-probs for
+every prompt token") which matched the right diagnosis. Always slice
+before reducing when only a small subset of positions matter.
+
+---
+
+## 2026-05-16 — Manifest race + sort-key bug
+
+**What broke**
+
+All five sweep jobs ran in parallel on g006 and tried to upsert into the
+shared `outputs/manifest.csv` simultaneously. Only the last writer (the
+qlora_100 row, since it finished first and re-wrote last after others
+started reading the empty file) survived. The other four runs' rows were
+lost from the consolidated manifest, though per-run `eval_metrics.json`,
+`train_metrics.json`, and `run_meta.json` were unaffected (they live in
+separate run directories).
+
+When I tried to rebuild the manifest by re-running
+`scripts/update_manifest.py` sequentially against each run directory,
+the first call succeeded but the second through fifth raised
+`TypeError: '<' not supported between instances of 'int' and 'str'`.
+
+Root cause in [scripts/update_manifest.py:131](../scripts/update_manifest.py#L131):
+the sort key was `(r.get("train_size") or 0, r.get("run_name") or "")`.
+Freshly-built rows have `train_size` as an `int` (from `train_metrics.json`),
+but rows loaded from an existing CSV have `train_size` as a `str` (CSV
+stringifies everything). Once both shapes coexist mid-rebuild, Python 3
+can't compare int with str → TypeError.
+
+**Fix**
+
+Added `_train_size_int()` helper that coerces the value to int via
+try/except. The sort key uses the helper, so it works whether the row
+came from a fresh JSON read or a CSV round-trip.
+
+**Follow-ups**
+
+- The race condition itself isn't fixed. If five concurrent jobs all
+  upsert into the same CSV, the result is non-deterministic. A proper
+  fix would either:
+  1. Add a file lock (`fcntl.flock`) around the read-modify-write in
+     `update_manifest.py`, or
+  2. Have each job write to a per-run shard (e.g.
+     `outputs/qlora_<size>/manifest_row.json`) and run a separate
+     consolidation step after the sweep.
+  The simplest near-term mitigation is to launch sweep jobs with a small
+  stagger (e.g. `--dependency=afterany:<prev_id>` so they queue serially)
+  or to just re-run `update_manifest.py` for each run dir after the
+  sweep finishes.
+- Worth noting: the per-run files are the ground truth. The manifest is
+  a derived view that can always be rebuilt from them. Losing the
+  manifest is annoying but not data loss.
+
+---
+
 ## 2026-05-16 — Batched eval scoring
 
 **What changed**
@@ -215,29 +407,39 @@ for, and is what it found in a more extreme form (recall_pos 0.998).
 
 ## Standing snapshot (as of 2026-05-16)
 
-**Sweep progress**
+**Sweep progress** — all five runs complete (2026-05-16)
 
-| Run | Train rows | Status | f1_macro | accuracy | recall_pos | recall_neg |
-| --- | --- | --- | --- | --- | --- | --- |
-| qlora_100 | 100 | done (collapsed to majority-positive) | 0.334 | 0.499 | 0.998 | 0.001 |
-| qlora_500 | 500 | not yet launched | — | — | — | — |
-| qlora_1k | 1,000 | not yet launched | — | — | — | — |
-| qlora_5k | 5,000 | not yet launched | — | — | — | — |
-| qlora_full | 27,263 | not yet launched | — | — | — | — |
+| Run | Train rows | Accuracy | F1_macro | Prec_pos | Recall_pos | Slurm |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| qlora_100 | 100 | 0.4991 | 0.3337 | 0.4992 | 0.9988 | 117767 |
+| qlora_500 | 500 | 0.6844 | 0.6817 | 0.6549 | 0.7778 | 117768 |
+| qlora_1k | 1,000 | 0.6981 | 0.6975 | 0.6811 | 0.7432 | 117769 |
+| qlora_5k | 5,000 | 0.7584 | 0.7584 | 0.7605 | 0.7532 | 117770 |
+| qlora_full | 27,263 | **0.8036** | **0.8035** | 0.8059 | 0.7990 | 117771 |
 
 **Baselines**
 
 | Baseline | Owner | Status |
 | --- | --- | --- |
-| TF-IDF + logistic regression | Abrevaa | Completed 2026-05-15, added to repo |
-| 3-shot Llama-3.1-8B prompting | Ash | Paused — example selection raised label-quality concerns; awaiting instructor guidance |
+| TF-IDF + logistic regression | Abrevaa | Completed 2026-05-15, in repo at `TF-IDF baseline/` (not yet committed — needs dir rename, space in name) |
+| 3-shot Llama-3.1-8B prompting | Ash | Paused — example selection raised label-quality concerns; awaiting Prof. Harker's guidance |
 
-**Open questions**
+**Open questions / follow-ups**
 
-- Label noise: dataset inspection surfaced apparently mislabeled rows.
-  3-shot example selection feels unavoidably cherry-picked given the
-  noise. Awaiting Prof. Harker's guidance before proceeding.
-- Model-load cost on Tillicum: ~30–90 s of GPFS read + bnb nf4 quant
-  per slurm job, paid **twice** because train and eval are separate
-  Python processes. Worth merging if eval-side optimizations don't get
-  the per-job time low enough.
+- 3-shot prompting baseline blocked on label-noise question with the instructor.
+- TF-IDF directory rename + commit (path with space is shell-hostile).
+- Week 8 deliverables: learning-curve plot, qualitative inspection of
+  30–50 disagreement examples (per proposal §5).
+- **Length-sorted batching** would unlock another 2–3× eval speedup
+  (estimated 60–90 s/run vs. the current 180 s) by eliminating
+  padding waste in random-order batches. Not blocking — current eval
+  cost is small relative to training, especially for qlora_full.
+- **Manifest race condition**: `update_manifest.py` is not concurrency-safe.
+  Either add a file lock or have each job write a per-run shard and
+  consolidate post-sweep. Current workaround is to rerun the manifest
+  builder sequentially after the sweep finishes (see 2026-05-16 entry).
+- **Model-load cost on Tillicum**: ~9 s on warm GPFS cache (measured
+  this round), paid twice because train and eval are separate Python
+  processes. Combining them into a single orchestrator would recover
+  ~9 s × 5 runs ≈ 45 s. Marginal; not worth doing now that eval is
+  fast.

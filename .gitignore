@@ -38,6 +38,10 @@ outputs/**/adapter_smoke/
 outputs/**/predictions.jsonl
 outputs/**/predictions_smoke.jsonl
 outputs/**/checkpoint-*/
+# TRL auto-generates an HF model-card README.md inside the run dir when
+# intermediate checkpoints are saved. It describes adapter weights that we
+# don't track anyway, so it has no place in the repo.
+outputs/**/README.md
 outputs/_interactive_smoke/
 outputs/_smoke_qlora/
 outputs/_smoke_run/
