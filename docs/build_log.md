@@ -421,7 +421,7 @@ for, and is what it found in a more extreme form (recall_pos 0.998).
 
 | Baseline | Owner | Status |
 | --- | --- | --- |
-| TF-IDF + logistic regression | Abrevaa | Completed 2026-05-15, in repo at `TF-IDF baseline/` (not yet committed — needs dir rename, space in name) |
+| TF-IDF + logistic regression | Abrevaa | Completed 2026-05-15, committed at [baselines/tfidf/](../baselines/tfidf/). acc 0.7675, F1_macro 0.7675 on the same held-out test set. |
 | 3-shot Llama-3.1-8B prompting | Ash | Paused — example selection raised label-quality concerns; awaiting Prof. Harker's guidance |
 
 **Open questions / follow-ups**

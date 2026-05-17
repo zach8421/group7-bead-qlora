@@ -42,6 +42,10 @@ outputs/**/checkpoint-*/
 # intermediate checkpoints are saved. It describes adapter weights that we
 # don't track anyway, so it has no place in the repo.
 outputs/**/README.md
+
+# ---- Baselines ----
+# Per-baseline predictions (regeneratable from the committed notebook + frozen splits).
+baselines/**/*predictions*.jsonl
 outputs/_interactive_smoke/
 outputs/_smoke_qlora/
 outputs/_smoke_run/
