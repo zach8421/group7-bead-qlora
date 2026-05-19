@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "dataset": "babe",
+  "seed": 42,
+  "source": "hf:mediabiasgroup/BABE",
+  "label_map": {
+    "0": "non-biased",
+    "1": "biased"
+  },
+  "split_strategy": "stratified_80_10_10",
+  "val_frac": 0.1,
+  "test_frac": 0.1,
+  "sizes": {
+    "full": {
+      "train": {
+        "path": "full/train.jsonl",
+        "sha256": "932f497a1d201852be72e08df5facc6c5d0149121467f9307386966c7b35355b",
+        "n": 3296,
+        "label_0": 1457,
+        "label_1": 1839,
+        "pct_label_1": 0.5579
+      },
+      "val": {
+        "path": "full/val.jsonl",
+        "sha256": "e11f53e26a25d1e549cd4c5df86e43a720ab8399bc51015c8e037687abc257c8",
+        "n": 412,
+        "label_0": 182,
+        "label_1": 230,
+        "pct_label_1": 0.5583
+      },
+      "test": {
+        "path": "full/test.jsonl",
+        "sha256": "5a31a5b0edbdcd1a787f95d2962fb05ebe8ddf1a716ba75bf7f18e35a98d5531",
+        "n": 413,
+        "label_0": 183,
+        "label_1": 230,
+        "pct_label_1": 0.5569
+      }
+    }
+  }
+}

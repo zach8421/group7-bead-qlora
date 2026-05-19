@@ -1,0 +1,16 @@
+{
+  "run_name": "tfidf_wnc__on__cajcodes",
+  "train_dataset": "wnc",
+  "eval_dataset": "cajcodes",
+  "n_examples": 66,
+  "accuracy": 0.5606060606060606,
+  "precision_pos": 0.660377358490566,
+  "recall_pos": 0.7608695652173914,
+  "f1_pos": 0.7070707070707071,
+  "f1_macro": 0.41414141414141414,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased       0.15      0.10      0.12        20\n      biased       0.66      0.76      0.71        46\n\n    accuracy                           0.56        66\n   macro avg       0.41      0.43      0.41        66\nweighted avg       0.51      0.56      0.53        66\n",
+  "eval_seconds": 4.688354969024658,
+  "smoke_test": false,
+  "adapter_path": null,
+  "test_jsonl": "../../data/frozen/cajcodes/full/test.jsonl"
+}

@@ -222,7 +222,12 @@ def load_for_eval(adapter_path: Path, base_model_name: str, smoke_test: bool):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--adapter-path", required=True)
-    ap.add_argument("--test-jsonl", default="data/frozen/test_held_out.jsonl")
+    ap.add_argument("--test-jsonl", default="data/frozen/beads/sizes/full/test.jsonl")
+    ap.add_argument("--eval-dataset", default=None,
+                    help="Name of the dataset the test_jsonl was drawn from (e.g. "
+                         "beads/babe/cajcodes/wnc). Stamped into eval_metrics.json. "
+                         "If omitted, inferred from the test_jsonl path "
+                         "(.../frozen/<dataset>/...).")
     ap.add_argument("--base-model", default="meta-llama/Llama-3.1-8B-Instruct")
     ap.add_argument("--smoke-base-model", default="hf-internal-testing/tiny-random-LlamaForCausalLM")
     ap.add_argument("--max-test-rows", type=int, default=0,
@@ -243,6 +248,17 @@ def main():
     test_path = Path(args.test_jsonl)
     if not test_path.exists():
         sys.exit(f"[eval] Test JSONL not found at {test_path}")
+
+    eval_dataset = args.eval_dataset
+    if not eval_dataset:
+        parts = test_path.resolve().parts
+        if "frozen" in parts:
+            i = parts.index("frozen")
+            if i + 1 < len(parts):
+                eval_dataset = parts[i + 1]
+        if not eval_dataset:
+            eval_dataset = "unknown"
+    print(f"[eval] eval_dataset = {eval_dataset}")
 
     rows = load_jsonl(test_path)
     if args.max_test_rows > 0:
@@ -299,6 +315,7 @@ def main():
 
     metrics = {
         "run_name": args.run_name,
+        "eval_dataset": eval_dataset,
         "n_examples": len(rows),
         "accuracy": float(accuracy_score(gold, pred)),
         "precision_pos": float(precision_score(gold, pred, pos_label=1, zero_division=0)),

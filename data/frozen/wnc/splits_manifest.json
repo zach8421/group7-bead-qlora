@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "dataset": "wnc",
+  "seed": 42,
+  "source": "local:data/wnc/bias_data/WNC",
+  "label_map": {
+    "0": "non-biased",
+    "1": "biased"
+  },
+  "split_strategy": "stratified_80_10_10",
+  "val_frac": 0.1,
+  "test_frac": 0.1,
+  "sizes": {
+    "full": {
+      "train": {
+        "path": "full/train.jsonl",
+        "sha256": "3f031a54a584b0c79f3c7aecd5f09d02ccc24806bf513db7748688af9418ddcf",
+        "n": 88328,
+        "label_0": 44164,
+        "label_1": 44164,
+        "pct_label_1": 0.5
+      },
+      "val": {
+        "path": "full/val.jsonl",
+        "sha256": "e661ec0493c5fdf665ed3881070468ca7aa2c0e40864630ad4a013d681a28e9e",
+        "n": 11041,
+        "label_0": 5520,
+        "label_1": 5521,
+        "pct_label_1": 0.5
+      },
+      "test": {
+        "path": "full/test.jsonl",
+        "sha256": "e88fab9926b392d89ce07603afc4de6bdfbb5217f6267125f21faf2f972f706f",
+        "n": 11041,
+        "label_0": 5521,
+        "label_1": 5520,
+        "pct_label_1": 0.5
+      }
+    }
+  }
+}

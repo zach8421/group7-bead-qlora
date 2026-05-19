@@ -1,0 +1,16 @@
+{
+  "run_name": "tfidf_cajcodes__on__babe",
+  "train_dataset": "cajcodes",
+  "eval_dataset": "babe",
+  "n_examples": 413,
+  "accuracy": 0.5544794188861986,
+  "precision_pos": 0.5558252427184466,
+  "recall_pos": 0.9956521739130435,
+  "f1_pos": 0.7133956386292835,
+  "f1_macro": 0.35669781931464173,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased       0.00      0.00      0.00       183\n      biased       0.56      1.00      0.71       230\n\n    accuracy                           0.55       413\n   macro avg       0.28      0.50      0.36       413\nweighted avg       0.31      0.55      0.40       413\n",
+  "eval_seconds": 0.01516103744506836,
+  "smoke_test": false,
+  "adapter_path": null,
+  "test_jsonl": "../../data/frozen/babe/full/test.jsonl"
+}

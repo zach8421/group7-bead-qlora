@@ -86,14 +86,34 @@ case "$SUBCMD" in
       exit 2
     fi
 
+    FILE_LIST_RAW="$(mktemp -t tillicum_sync_raw.XXXXXX)"
     FILE_LIST="$(mktemp -t tillicum_sync.XXXXXX)"
-    trap 'rm -f "$FILE_LIST"' EXIT
+    trap 'rm -f "$FILE_LIST_RAW" "$FILE_LIST"' EXIT
 
     # -z (NUL-terminated) handles filenames with spaces, like 'docs/Proposal v2.txt'.
-    ( cd "$LOCAL_ROOT" && git ls-files --cached --others --exclude-standard -z ) > "$FILE_LIST"
+    ( cd "$LOCAL_ROOT" && git ls-files --cached --others --exclude-standard -z ) > "$FILE_LIST_RAW"
 
-    n_files=$(tr -cd '\0' < "$FILE_LIST" | wc -c | tr -d ' ')
-    echo "[sync] $n_files files selected by 'git ls-files --cached --others --exclude-standard'"
+    # Filter out paths that are in the git index but deleted from the working
+    # tree (an uncommitted `D` in `git status`). rsync would otherwise abort
+    # with "stat: No such file or directory" and exit 23 — which can happen
+    # mid-rename, e.g. when the v2 multi-dataset restructure leaves
+    # outputs/qlora_<size>/*.json staged for deletion.
+    n_raw=0
+    n_skipped=0
+    while IFS= read -r -d '' f; do
+      n_raw=$((n_raw + 1))
+      if [[ -e "$LOCAL_ROOT/$f" ]]; then
+        printf '%s\0' "$f" >> "$FILE_LIST"
+      else
+        n_skipped=$((n_skipped + 1))
+      fi
+    done < "$FILE_LIST_RAW"
+
+    n_files=$((n_raw - n_skipped))
+    echo "[sync] $n_files files to push  ($n_raw selected by git, $n_skipped skipped because they no longer exist on disk)"
+    if [[ "$n_skipped" -gt 0 ]]; then
+      echo "[sync] (these are uncommitted 'D' entries in 'git status' — commit the deletion to clean this up)"
+    fi
     echo
 
     "${RSYNC[@]}" --from0 --files-from="$FILE_LIST" \
@@ -111,8 +131,15 @@ case "$SUBCMD" in
         "$LOCAL_ROOT/data/bead/" "$REMOTE/data/bead/"
     fi
     if [[ -d "$LOCAL_ROOT/data/frozen" ]]; then
-      echo "[sync] data/frozen/*.jsonl + manifest -> remote"
-      "${RSYNC[@]}" --include='*.jsonl' --include='splits_manifest.json' --exclude='*' \
+      echo "[sync] data/frozen/**/*.jsonl + manifests -> remote"
+      # Nested layout: data/frozen/{beads/sizes/<sz>,babe/full,cajcodes/full,wnc/full}/*.jsonl.
+      # `--include='*/'` lets rsync descend into subdirs — without it the
+      # trailing `--exclude='*'` blocks recursion and only top-level files transfer.
+      "${RSYNC[@]}" \
+        --include='*/' \
+        --include='*.jsonl' \
+        --include='splits_manifest.json' \
+        --exclude='*' \
         "$LOCAL_ROOT/data/frozen/" "$REMOTE/data/frozen/"
     fi
     ;;

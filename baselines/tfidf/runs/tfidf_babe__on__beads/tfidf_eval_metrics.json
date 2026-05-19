@@ -1,0 +1,16 @@
+{
+  "run_name": "tfidf_babe__on__beads",
+  "train_dataset": "babe",
+  "eval_dataset": "beads",
+  "n_examples": 6816,
+  "accuracy": 0.4848884976525822,
+  "precision_pos": 0.49173047473200615,
+  "recall_pos": 0.9435791948280928,
+  "f1_pos": 0.6465317628108326,
+  "f1_macro": 0.34867815499287236,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased       0.33      0.03      0.05      3413\n      biased       0.49      0.94      0.65      3403\n\n    accuracy                           0.48      6816\n   macro avg       0.41      0.49      0.35      6816\nweighted avg       0.41      0.48      0.35      6816\n",
+  "eval_seconds": 0.2571749687194824,
+  "smoke_test": false,
+  "adapter_path": null,
+  "test_jsonl": "../../data/frozen/beads/sizes/full/test.jsonl"
+}

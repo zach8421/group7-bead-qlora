@@ -17,14 +17,66 @@ Usage
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import json
+import os
 import sys
+import time
 from pathlib import Path
+
+try:
+    import fcntl  # POSIX advisory lock; not available on Windows
+    _HAVE_FCNTL = True
+except ImportError:
+    _HAVE_FCNTL = False
+
+
+@contextlib.contextmanager
+def manifest_lock(csv_path: Path, timeout_s: float = 60.0):
+    """Advisory exclusive lock around a manifest's read-modify-write.
+
+    Concurrent QLoRA jobs (and the 16-cell cross-eval matrix) all upsert into
+    the same `outputs/manifest.csv`. Without a lock, a slow reader on one job
+    can race with a faster writer on another and clobber rows — see the
+    2026-05-16 entry in docs/build_log.md for the incident this guards against.
+
+    Uses an on-disk `.lock` sibling so the lock survives short-lived Python
+    process boundaries. On Windows (no fcntl) this degrades to a no-op; that
+    matches the prior behavior — we never claimed Windows support — and the
+    Tillicum/macOS dev paths both have fcntl.
+    """
+    if not _HAVE_FCNTL:
+        yield
+        return
+    lock_path = csv_path.with_suffix(csv_path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    deadline = time.monotonic() + timeout_s
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise SystemExit(
+                        f"[manifest] timed out after {timeout_s:.0f}s waiting for {lock_path}. "
+                        f"Stale lock? Remove the file and retry."
+                    )
+                time.sleep(0.25)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 COLUMNS = [
     "run_name",
+    "train_dataset",
+    "eval_dataset",
     "smoke_test",
     "model_name",
     "train_size",
@@ -81,8 +133,34 @@ def build_row(run_dir: Path) -> dict:
     inputs = meta.get("inputs") or {}
     label_map = inputs.get("splits_label_map") or {}
 
+    # train_dataset / eval_dataset are tracked separately so cross-eval rows
+    # can be pivoted from this table.
+    KNOWN_DATASETS = {"beads", "babe", "cajcodes", "wnc"}
+
+    def _infer_dataset_from_path(jsonl_path: str | None) -> str | None:
+        if not jsonl_path:
+            return None
+        parts = Path(jsonl_path).parts
+        if "frozen" not in parts:
+            return None
+        i = parts.index("frozen")
+        if i + 1 >= len(parts):
+            return None
+        candidate = parts[i + 1]
+        # Reject flat-layout legacy paths (data/frozen/train_full.jsonl) — the
+        # part after "frozen" there is a filename, not a dataset dir. Those
+        # runs predate the multi-dataset restructure and were all BEADs.
+        if candidate.endswith(".jsonl"):
+            return "beads"
+        return candidate if candidate in KNOWN_DATASETS else None
+
+    train_dataset = inputs.get("train_dataset") or _infer_dataset_from_path(inputs.get("train_jsonl"))
+    eval_dataset = ev.get("eval_dataset") or _infer_dataset_from_path(ev.get("test_jsonl"))
+
     row = {
         "run_name": run_name,
+        "train_dataset": train_dataset,
+        "eval_dataset": eval_dataset,
         "smoke_test": train.get("smoke_test", meta.get("smoke_test")),
         "model_name": train.get("model_name") or (meta.get("model") or {}).get("model_name"),
         "train_size": train.get("examples"),
@@ -171,11 +249,12 @@ def main():
     csv_path = Path(args.manifest)
     json_path = csv_path.with_suffix(".json")
 
-    rows = load_existing_csv(csv_path)
-    rows[row["run_name"]] = row
+    with manifest_lock(csv_path):
+        rows = load_existing_csv(csv_path)
+        rows[row["run_name"]] = row
 
-    write_csv(csv_path, rows)
-    write_json(json_path, rows)
+        write_csv(csv_path, rows)
+        write_json(json_path, rows)
 
     print(f"[manifest] Upserted {row['run_name']} into {csv_path}")
     print(json.dumps(row, indent=2, default=str))

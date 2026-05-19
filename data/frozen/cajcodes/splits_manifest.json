@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "dataset": "cajcodes",
+  "seed": 42,
+  "source": "hf:cajcodes/political-bias",
+  "label_map": {
+    "0": "non-biased",
+    "1": "biased"
+  },
+  "split_strategy": "stratified_80_10_10",
+  "val_frac": 0.1,
+  "test_frac": 0.1,
+  "sizes": {
+    "full": {
+      "train": {
+        "path": "full/train.jsonl",
+        "sha256": "065854f3395cce161eca20cbcb66cbe85e91bc9a5c7039f66d752d0615365b67",
+        "n": 525,
+        "label_0": 161,
+        "label_1": 364,
+        "pct_label_1": 0.6933
+      },
+      "val": {
+        "path": "full/val.jsonl",
+        "sha256": "579ba2a5223337de20905eab783e203f4b182b8779bcd45c6afcc70bd0d82c95",
+        "n": 66,
+        "label_0": 20,
+        "label_1": 46,
+        "pct_label_1": 0.697
+      },
+      "test": {
+        "path": "full/test.jsonl",
+        "sha256": "14220870aa39db9f4d663808207d0899aacab3a705f38be0c9c4195442b162c2",
+        "n": 66,
+        "label_0": 20,
+        "label_1": 46,
+        "pct_label_1": 0.697
+      }
+    }
+  }
+}

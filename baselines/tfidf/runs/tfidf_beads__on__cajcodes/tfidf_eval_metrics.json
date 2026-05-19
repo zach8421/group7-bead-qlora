@@ -1,0 +1,16 @@
+{
+  "run_name": "tfidf_beads__on__cajcodes",
+  "train_dataset": "beads",
+  "eval_dataset": "cajcodes",
+  "n_examples": 66,
+  "accuracy": 0.696969696969697,
+  "precision_pos": 0.703125,
+  "recall_pos": 0.9782608695652174,
+  "f1_pos": 0.8181818181818182,
+  "f1_macro": 0.4545454545454546,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased       0.50      0.05      0.09        20\n      biased       0.70      0.98      0.82        46\n\n    accuracy                           0.70        66\n   macro avg       0.60      0.51      0.45        66\nweighted avg       0.64      0.70      0.60        66\n",
+  "eval_seconds": 2.256524085998535,
+  "smoke_test": false,
+  "adapter_path": null,
+  "test_jsonl": "../../data/frozen/cajcodes/full/test.jsonl"
+}

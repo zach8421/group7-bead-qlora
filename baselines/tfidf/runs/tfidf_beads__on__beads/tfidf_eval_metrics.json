@@ -1,0 +1,16 @@
+{
+  "run_name": "tfidf_beads__on__beads",
+  "train_dataset": "beads",
+  "eval_dataset": "beads",
+  "n_examples": 6816,
+  "accuracy": 0.7674589201877934,
+  "precision_pos": 0.7675103001765744,
+  "recall_pos": 0.766382603585072,
+  "f1_pos": 0.7669460373474489,
+  "f1_macro": 0.7674577939628475,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased       0.77      0.77      0.77      3413\n      biased       0.77      0.77      0.77      3403\n\n    accuracy                           0.77      6816\n   macro avg       0.77      0.77      0.77      6816\nweighted avg       0.77      0.77      0.77      6816\n",
+  "eval_seconds": 2.3206257820129395,
+  "smoke_test": false,
+  "adapter_path": null,
+  "test_jsonl": "../../data/frozen/beads/sizes/full/test.jsonl"
+}

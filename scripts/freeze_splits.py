@@ -1,39 +1,38 @@
-"""Freeze the v2 BEAD splits for the Week-7 sweep.
+"""Freeze train/val/test JSONL splits for the cross-eval datasets.
 
-What this does
---------------
-1. Loads BEAD from `data/bead/` (or HuggingFace with --from-hf, mock with --mock).
-2. Carves a 20% stratified test split off the original train (test_held_out).
-3. Keeps the dataset's validation split as-is (val).
-4. From the remaining train_pool, builds a chain of *nested* stratified subsets
-   so the smaller splits are byte-subsets of the larger ones:
+Dispatches on ``--dataset {beads,babe,cajcodes,wnc}``:
 
-       train_100 ⊂ train_500 ⊂ train_1k ⊂ train_5k ⊂ train_full
+* **beads** — preserves BEADs' native train/valid boundary, carves a 20%
+  stratified test off the original train, then builds *nested* stratified
+  subsets so smaller training pools are byte-subsets of larger ones:
 
-5. Writes JSONL for every split into `data/frozen/`.
-6. Computes a SHA256 over the (newline-joined) JSONL bytes of each split and
-   stores them, alongside per-split counts and class balance, in
-   `data/frozen/splits_manifest.json`. This manifest is the source of truth
-   the teammates' TF-IDF / 3-shot baselines and the QLoRA sweep all reference.
+      train_100 ⊂ train_500 ⊂ train_1k ⊂ train_5k ⊂ train_full
 
-Why nest instead of independently re-stratifying each size
-----------------------------------------------------------
-A learning-curve study should answer "what does the model gain from seeing
-*more* data?" — keeping smaller subsets as prefixes of larger ones isolates
-that question from sampling noise across subset draws.
+  Output layout:
+      data/frozen/beads/sizes/{100,500,1k,5k,full}/{train,val,test}.jsonl
+      data/frozen/beads/splits_manifest.json
 
-Note vs the v1 calibration splits
----------------------------------
-`data/processed/` (v1) drew train_1k directly from train_pool with a
-different stratified call. The v1 splits are kept as-is for reproducibility
-of the v1 calibration result; the v2 sweep uses `data/frozen/` from here on.
+  val.jsonl and test.jsonl are copied into every size dir so each one is
+  self-contained — that matches the new-dataset layout and keeps the
+  cross-eval orchestrator's path discovery simple.
+
+* **babe / cajcodes / wnc** — stratified 80/10/10 train/val/test split off the
+  full dataset (the loaders union all native splits). Output layout:
+
+      data/frozen/{name}/full/{train,val,test}.jsonl
+      data/frozen/{name}/splits_manifest.json
 
 Each output line:
     {"text": "<sentence>", "label_int": 0|1, "label_str": "biased"|"non-biased"}
 
+The ``id`` field intentionally does **not** round-trip into the JSONL. The
+trainer/evaluator never use IDs, and keeping records id-less means re-running
+``freeze_splits.py --dataset beads`` reproduces the v2 sweep's SHA256s
+byte-for-byte (subject to library determinism).
+
 Smoke test
 ----------
-    python scripts/freeze_splits.py --mock --out-dir data/frozen_mock
+    python scripts/freeze_splits.py --dataset beads --mock --out-dir data/frozen_mock
 """
 from __future__ import annotations
 
@@ -41,6 +40,7 @@ import argparse
 import hashlib
 import json
 import random
+import shutil
 import sys
 from pathlib import Path
 
@@ -48,9 +48,20 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
+# Make sibling-package imports work whether this is run as `python scripts/freeze_splits.py`
+# or as a module.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.dataset_loaders import load_babe, load_beads, load_cajcodes, load_wnc  # noqa: E402
+
 
 SEED = 42
 SWEEP_SIZES = [100, 500, 1000, 5000]  # 'full' is everything that remains
+DEFAULT_TEST_FRAC = 0.2       # BEADs: 20% of original train is held out
+DEFAULT_VAL_FRAC = 0.1        # simple datasets: 10% val, 10% test
+DEFAULT_SIMPLE_TEST_FRAC = 0.1
 
 
 def set_seed(seed: int) -> None:
@@ -58,73 +69,9 @@ def set_seed(seed: int) -> None:
     np.random.seed(seed)
 
 
-def load_bead_csv(csv_dir: Path, text_col: str, label_col: str):
-    train_path = csv_dir / "bias-train.csv"
-    val_path = csv_dir / "bias-valid.csv"
-    for p in (train_path, val_path):
-        if not p.exists():
-            raise SystemExit(
-                f"Missing {p}. Pass --from-hf to download from HuggingFace, "
-                f"or --csv-dir to point elsewhere."
-            )
-    train_df = pd.read_csv(train_path)
-    val_df = pd.read_csv(val_path)
-    for df, name in [(train_df, "train"), (val_df, "validation")]:
-        for col in (text_col, label_col):
-            if col not in df.columns:
-                raise SystemExit(
-                    f"Column '{col}' not in {name} CSV. Available: {list(df.columns)}. "
-                    f"Override with --text-col / --label-col."
-                )
-    return (
-        train_df[[text_col, label_col]].rename(
-            columns={text_col: "text", label_col: "label_int"}
-        ),
-        val_df[[text_col, label_col]].rename(
-            columns={text_col: "text", label_col: "label_int"}
-        ),
-    )
-
-
-def load_bead_hf(dataset_name: str, dataset_config: str, text_col: str, label_col: str):
-    from datasets import load_dataset
-
-    ds = load_dataset(dataset_name, dataset_config)
-    if "train" not in ds:
-        raise SystemExit(f"Dataset {dataset_name}:{dataset_config} has no 'train' split.")
-    train_df = ds["train"].to_pandas()
-    val_key = next((k for k in ("validation", "valid", "val") if k in ds), None)
-    if val_key is None:
-        raise SystemExit(f"Dataset has no validation split. Got: {list(ds.keys())}")
-    val_df = ds[val_key].to_pandas()
-    return (
-        train_df[[text_col, label_col]].rename(columns={text_col: "text", label_col: "label_int"}),
-        val_df[[text_col, label_col]].rename(columns={text_col: "text", label_col: "label_int"}),
-    )
-
-
-def build_mock(n_train: int = 6000, n_val: int = 600):
-    rng = np.random.default_rng(SEED)
-    biased_templates = [
-        "Those people always cause problems.",
-        "Everyone knows that group can't be trusted.",
-        "It is obvious which side is correct on this issue.",
-    ]
-    neutral_templates = [
-        "The committee released its annual report this morning.",
-        "Researchers measured the temperature at three locations.",
-        "The library will close at 6pm on Sunday.",
-    ]
-
-    def gen(n):
-        rows = []
-        for i in range(n):
-            label = int(rng.integers(0, 2))
-            tpl = biased_templates if label == 1 else neutral_templates
-            rows.append({"text": tpl[i % len(tpl)] + f" (item {i})", "label_int": label})
-        return pd.DataFrame(rows)
-
-    return gen(n_train), gen(n_val)
+# ---------------------------------------------------------------------------
+# Pure helpers (reused across dataset paths)
+# ---------------------------------------------------------------------------
 
 
 def to_records(df: pd.DataFrame, label0_text: str, label1_text: str) -> list[dict]:
@@ -162,20 +109,14 @@ def class_balance(records: list[dict]) -> dict:
 
 
 def name_for_size(s: int) -> str:
-    """train_100 / train_500 / train_1k / train_5k style. Falls back to train_<n> for arbitrary sizes."""
+    """train_100 / train_500 / train_1k / train_5k style — used for the size dir name."""
     if s % 1000 == 0 and s >= 1000:
-        return f"train_{s // 1000}k"
-    return f"train_{s}"
+        return f"{s // 1000}k"
+    return str(s)
 
 
-def carve_nested(train_pool_df: pd.DataFrame, sizes: list[int], seed: int) -> tuple[dict[str, pd.DataFrame], list[str]]:
-    """Build nested stratified subsets: smallest ⊂ next ⊂ ... ⊂ train_pool.
-
-    Strategy: sort sizes ascending. Walk descending: at each step, stratify-split
-    the current parent into (rest, smaller). The "smaller" becomes the next parent.
-
-    Returns (dict of name -> df including 'train_full', ordered list of names ascending).
-    """
+def carve_nested(train_pool_df: pd.DataFrame, sizes: list[int], seed: int):
+    """Build nested stratified subsets so smaller subsets are subsets of larger ones."""
     sizes_asc = sorted(sizes)
     sizes_desc = list(reversed(sizes_asc))
 
@@ -184,7 +125,7 @@ def carve_nested(train_pool_df: pd.DataFrame, sizes: list[int], seed: int) -> tu
             f"max subset size {max(sizes_asc)} exceeds train_pool size {len(train_pool_df)}"
         )
 
-    out: dict[str, pd.DataFrame] = {"train_full": train_pool_df.copy()}
+    out: dict[str, pd.DataFrame] = {"full": train_pool_df.copy()}
     parent = train_pool_df
     for s in sizes_desc:
         _rest, smaller = train_test_split(
@@ -194,15 +135,14 @@ def carve_nested(train_pool_df: pd.DataFrame, sizes: list[int], seed: int) -> tu
             random_state=seed,
         )
         out[name_for_size(s)] = smaller
-        parent = smaller  # next-smaller subset comes from this one (guarantees nesting)
+        parent = smaller
 
-    ordered_names = [name_for_size(s) for s in sizes_asc] + ["train_full"]
+    ordered_names = [name_for_size(s) for s in sizes_asc] + ["full"]
     return out, ordered_names
 
 
-def verify_nesting(splits: dict[str, list[dict]], order: list[str]) -> None:
-    """Assert smallest ⊂ ... ⊂ train_full for the given chain of split names."""
-    sets = {name: set(json.dumps(r, sort_keys=True) for r in splits[name]) for name in order}
+def verify_nesting(records_by_name: dict[str, list[dict]], order: list[str]) -> None:
+    sets = {name: set(json.dumps(r, sort_keys=True) for r in records_by_name[name]) for name in order}
     for i in range(len(order) - 1):
         smaller, larger = order[i], order[i + 1]
         if not sets[smaller].issubset(sets[larger]):
@@ -212,47 +152,60 @@ def verify_nesting(splits: dict[str, list[dict]], order: list[str]) -> None:
             )
 
 
-def main():
-    ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    ap.add_argument("--csv-dir", default="data/bead")
-    ap.add_argument("--from-hf", action="store_true")
-    ap.add_argument("--dataset", default="shainar/BEAD")
-    ap.add_argument("--config", default="Bias_classification")
-    ap.add_argument("--text-col", default="text")
-    ap.add_argument("--label-col", default="label")
-    ap.add_argument("--label0-text", default="non-biased")
-    ap.add_argument("--label1-text", default="biased")
-    ap.add_argument(
-        "--sizes",
-        default=",".join(str(s) for s in SWEEP_SIZES),
-        help="Comma-separated subset sizes (excluding 'full'). Default 100,500,1000,5000",
-    )
-    ap.add_argument("--test-frac", type=float, default=0.2)
-    ap.add_argument("--out-dir", default="data/frozen")
-    ap.add_argument("--mock", action="store_true")
-    ap.add_argument("--seed", type=int, default=SEED)
-    args = ap.parse_args()
+# ---------------------------------------------------------------------------
+# Mock data (smoke testing without HF / disk)
+# ---------------------------------------------------------------------------
 
-    set_seed(args.seed)
-    sizes = [int(s) for s in args.sizes.split(",") if s.strip()]
 
+def build_mock(n_train: int = 6000, n_val: int = 600):
+    rng = np.random.default_rng(SEED)
+    biased = [
+        "Those people always cause problems.",
+        "Everyone knows that group can't be trusted.",
+        "It is obvious which side is correct on this issue.",
+    ]
+    neutral = [
+        "The committee released its annual report this morning.",
+        "Researchers measured the temperature at three locations.",
+        "The library will close at 6pm on Sunday.",
+    ]
+
+    def gen(n):
+        rows = []
+        for i in range(n):
+            label = int(rng.integers(0, 2))
+            tpl = biased if label == 1 else neutral
+            rows.append({
+                "id": f"mock_{i}",
+                "text": tpl[i % len(tpl)] + f" (item {i})",
+                "label_int": label,
+            })
+        return pd.DataFrame(rows)
+
+    return gen(n_train), gen(n_val)
+
+
+# ---------------------------------------------------------------------------
+# BEADs (multi-size nested sweep)
+# ---------------------------------------------------------------------------
+
+
+def _prepare_beads(args) -> dict:
     if args.mock:
-        print("[freeze] Using synthetic mock dataset.")
+        print("[freeze] beads: using synthetic mock dataset.")
         train_df, val_df = build_mock()
         source = "MOCK"
     elif args.from_hf:
-        print(f"[freeze] Loading {args.dataset}:{args.config} from HuggingFace ...")
-        train_df, val_df = load_bead_hf(args.dataset, args.config, args.text_col, args.label_col)
-        source = f"hf:{args.dataset}:{args.config}"
+        print(f"[freeze] beads: loading from HF ({load_beads.HF_NAME}:{load_beads.HF_CONFIG}) ...")
+        train_df, val_df = load_beads.load_split_hf()
+        source = f"hf:{load_beads.HF_NAME}:{load_beads.HF_CONFIG}"
     else:
         csv_dir = Path(args.csv_dir)
-        print(f"[freeze] Loading BEAD CSVs from {csv_dir} ...")
-        train_df, val_df = load_bead_csv(csv_dir, args.text_col, args.label_col)
-        source = f"csv:{args.csv_dir}"
+        print(f"[freeze] beads: loading CSVs from {csv_dir} ...")
+        train_df, val_df = load_beads.load_split_csv(csv_dir)
+        source = f"csv:{csv_dir}"
 
-    print(f"[freeze] Original train rows: {len(train_df)}; validation rows: {len(val_df)}")
+    print(f"[freeze] beads: original train rows={len(train_df)}, validation rows={len(val_df)}")
 
     train_pool_df, test_df = train_test_split(
         train_df,
@@ -260,49 +213,159 @@ def main():
         stratify=train_df["label_int"],
         random_state=args.seed,
     )
-    print(
-        f"[freeze] After test carve-off: train_pool={len(train_pool_df)}, test={len(test_df)}"
-    )
+    print(f"[freeze] beads: after test carve-off: train_pool={len(train_pool_df)}, test={len(test_df)}")
 
-    nested_dfs, nested_order = carve_nested(train_pool_df, sizes, args.seed)
+    nested_dfs, nested_order = carve_nested(train_pool_df, args.sizes, args.seed)
 
-    out_dir = Path(args.out_dir)
-    splits_records: dict[str, list[dict]] = {}
-    for name, df in nested_dfs.items():
-        splits_records[name] = to_records(df, args.label0_text, args.label1_text)
-    splits_records["val"] = to_records(val_df, args.label0_text, args.label1_text)
-    splits_records["test_held_out"] = to_records(test_df, args.label0_text, args.label1_text)
+    # Convert each split to records once.
+    train_records_by_size: dict[str, list[dict]] = {}
+    for size_name, df in nested_dfs.items():
+        train_records_by_size[size_name] = to_records(df, args.label0_text, args.label1_text)
+    val_records = to_records(val_df, args.label0_text, args.label1_text)
+    test_records = to_records(test_df, args.label0_text, args.label1_text)
 
-    # Sanity: prove the nesting invariant before we hand the files to teammates.
-    verify_nesting(splits_records, nested_order)
-    print(f"[freeze] Nesting verified: {' ⊂ '.join(nested_order)}")
+    verify_nesting(train_records_by_size, nested_order)
+    print(f"[freeze] beads: nesting verified: {' ⊂ '.join('train_' + n for n in nested_order)}")
 
-    hashes: dict[str, str] = {}
-    for name, records in splits_records.items():
-        path = out_dir / f"{name}.jsonl"
-        hashes[name] = write_jsonl(records, path)
+    out_root = Path(args.out_dir) / "beads"
+    sizes_block: dict[str, dict] = {}
+    for size_name, train_recs in train_records_by_size.items():
+        size_dir = out_root / "sizes" / size_name
+        train_sha = write_jsonl(train_recs, size_dir / "train.jsonl")
+        val_sha = write_jsonl(val_records, size_dir / "val.jsonl")
+        test_sha = write_jsonl(test_records, size_dir / "test.jsonl")
+        sizes_block[size_name] = {
+            "train": {"path": f"sizes/{size_name}/train.jsonl", "sha256": train_sha, **class_balance(train_recs)},
+            "val":   {"path": f"sizes/{size_name}/val.jsonl",   "sha256": val_sha,   **class_balance(val_records)},
+            "test":  {"path": f"sizes/{size_name}/test.jsonl",  "sha256": test_sha,  **class_balance(test_records)},
+        }
 
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "dataset": "beads",
         "seed": args.seed,
         "source": source,
         "label_map": {"0": args.label0_text, "1": args.label1_text},
+        "split_strategy": "preserve_native_val_then_carve_test_then_nested_subsets",
         "test_frac_of_original_train": args.test_frac,
-        "nesting": " ⊂ ".join(nested_order),
-        "splits": {
-            name: {
-                "path": f"{name}.jsonl",
-                "sha256": hashes[name],
-                **class_balance(splits_records[name]),
+        "nesting": " ⊂ ".join("train_" + n for n in nested_order),
+        "sizes": sizes_block,
+    }
+    return _emit_manifest(manifest, out_root)
+
+
+# ---------------------------------------------------------------------------
+# Simple datasets (BABE, cajcodes, WNC) — single 80/10/10 split
+# ---------------------------------------------------------------------------
+
+
+SIMPLE_LOADERS = {
+    "babe": load_babe,
+    "cajcodes": load_cajcodes,
+    "wnc": load_wnc,
+}
+
+
+def _prepare_simple(args) -> dict:
+    name = args.dataset
+    loader = SIMPLE_LOADERS[name]
+    print(f"[freeze] {name}: loading via {loader.__name__} ...")
+    df = loader.load()
+    print(f"[freeze] {name}: total rows={len(df)}, label dist={df['label_int'].value_counts().to_dict()}")
+
+    # 80/10/10 stratified — two splits because train_test_split is binary.
+    train_df, rest_df = train_test_split(
+        df,
+        test_size=args.val_frac + args.test_frac_simple,
+        stratify=df["label_int"],
+        random_state=args.seed,
+    )
+    val_share = args.val_frac / (args.val_frac + args.test_frac_simple)
+    val_df, test_df = train_test_split(
+        rest_df,
+        test_size=1 - val_share,
+        stratify=rest_df["label_int"],
+        random_state=args.seed,
+    )
+    print(f"[freeze] {name}: train={len(train_df)}, val={len(val_df)}, test={len(test_df)}")
+
+    train_records = to_records(train_df, args.label0_text, args.label1_text)
+    val_records = to_records(val_df, args.label0_text, args.label1_text)
+    test_records = to_records(test_df, args.label0_text, args.label1_text)
+
+    out_root = Path(args.out_dir) / name
+    size_dir = out_root / "full"
+    train_sha = write_jsonl(train_records, size_dir / "train.jsonl")
+    val_sha = write_jsonl(val_records, size_dir / "val.jsonl")
+    test_sha = write_jsonl(test_records, size_dir / "test.jsonl")
+
+    manifest = {
+        "schema_version": 2,
+        "dataset": name,
+        "seed": args.seed,
+        "source": f"hf:{getattr(loader, 'HF_NAME', '?')}" if name != "wnc" else "local:data/wnc/bias_data/WNC",
+        "label_map": {"0": args.label0_text, "1": args.label1_text},
+        "split_strategy": "stratified_80_10_10",
+        "val_frac": args.val_frac,
+        "test_frac": args.test_frac_simple,
+        "sizes": {
+            "full": {
+                "train": {"path": "full/train.jsonl", "sha256": train_sha, **class_balance(train_records)},
+                "val":   {"path": "full/val.jsonl",   "sha256": val_sha,   **class_balance(val_records)},
+                "test":  {"path": "full/test.jsonl",  "sha256": test_sha,  **class_balance(test_records)},
             }
-            for name in splits_records
         },
     }
-    manifest_path = out_dir / "splits_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
+    return _emit_manifest(manifest, out_root)
 
-    print(f"[freeze] Wrote splits + manifest to {out_dir}/")
+
+def _emit_manifest(manifest: dict, out_root: Path) -> dict:
+    manifest_path = out_root / "splits_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
+    print(f"[freeze] wrote manifest → {manifest_path}")
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    return manifest
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("--dataset", required=True, choices=["beads", "babe", "cajcodes", "wnc"])
+    ap.add_argument("--out-dir", default="data/frozen",
+                    help="Root output dir. Per-dataset subdir is appended.")
+    ap.add_argument("--seed", type=int, default=SEED)
+    ap.add_argument("--label0-text", default="non-biased")
+    ap.add_argument("--label1-text", default="biased")
+
+    # BEADs-only options
+    ap.add_argument("--csv-dir", default="data/bead", help="(beads) BEADs CSV directory.")
+    ap.add_argument("--from-hf", action="store_true", help="(beads) Load from HuggingFace instead of CSV.")
+    ap.add_argument("--mock", action="store_true", help="(beads) Use synthetic mock data.")
+    ap.add_argument("--test-frac", type=float, default=DEFAULT_TEST_FRAC,
+                    help="(beads) Fraction of native train to hold out as test.")
+    ap.add_argument("--sizes", default=",".join(str(s) for s in SWEEP_SIZES),
+                    help="(beads) Comma-separated subset sizes (excluding 'full').")
+
+    # Simple-dataset options
+    ap.add_argument("--val-frac", type=float, default=DEFAULT_VAL_FRAC,
+                    help="(simple datasets) Fraction of full data assigned to validation.")
+    ap.add_argument("--test-frac-simple", type=float, default=DEFAULT_SIMPLE_TEST_FRAC,
+                    help="(simple datasets) Fraction of full data assigned to test.")
+
+    args = ap.parse_args()
+    set_seed(args.seed)
+    args.sizes = [int(s) for s in args.sizes.split(",") if s.strip()]
+
+    if args.dataset == "beads":
+        _prepare_beads(args)
+    else:
+        _prepare_simple(args)
 
 
 if __name__ == "__main__":

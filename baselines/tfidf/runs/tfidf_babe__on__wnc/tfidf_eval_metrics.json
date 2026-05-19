@@ -1,0 +1,16 @@
+{
+  "run_name": "tfidf_babe__on__wnc",
+  "train_dataset": "babe",
+  "eval_dataset": "wnc",
+  "n_examples": 11041,
+  "accuracy": 0.5100987229417625,
+  "precision_pos": 0.5071090047393365,
+  "recall_pos": 0.7172101449275362,
+  "f1_pos": 0.5941322128010805,
+  "f1_macro": 0.4881569116546808,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased       0.52      0.30      0.38      5521\n      biased       0.51      0.72      0.59      5520\n\n    accuracy                           0.51     11041\n   macro avg       0.51      0.51      0.49     11041\nweighted avg       0.51      0.51      0.49     11041\n",
+  "eval_seconds": 0.26085615158081055,
+  "smoke_test": false,
+  "adapter_path": null,
+  "test_jsonl": "../../data/frozen/wnc/full/test.jsonl"
+}

@@ -9,6 +9,295 @@ use the `run_meta.json` files in `outputs/<run>/`.
 
 ---
 
+## 2026-05-19 — Tillicum launch prep: 3 new adapters + 16-cell cross-eval
+
+**What this adds**
+
+Plumbing to launch the QLoRA arm of the cross-eval matrix on Tillicum as a
+single `sbatch`-chain — three new train jobs (BABE, cajcodes, WNC) plus one
+cross-eval job that fans out across all four `outputs/qlora_*_full/` adapters
+× all four test sets (16 cells).
+
+**Decisions baked in**
+
+- **WNC capped at 27,263 rows** (= BEADs full). Holds dataset size constant
+  across the four adapters so the cross-eval matrix isolates *dataset content*
+  rather than mixing in *training set size*. Implemented as the
+  `--max-train-rows` knob already in `train_qlora.py`, surfaced as
+  `MAX_TRAIN_ROWS` in [scripts/run_qlora.slurm](../scripts/run_qlora.slurm).
+- **Adapters run concurrently, cross-eval waits.** The three train jobs are
+  submitted with no inter-job dependency (different datasets, different
+  durations — wnc ≈ 100 min, babe ≈ 12 min, cajcodes ≈ 2 min on H200). The
+  cross-eval job carries `--dependency=afterok:<3 train ids>` so it only
+  runs after all four adapters exist on disk.
+- **Manifest race finally fixed** — see below.
+
+**Files added / changed**
+
+| Path | Change |
+| --- | --- |
+| [scripts/launch_cross_eval_sweep.sh](../scripts/launch_cross_eval_sweep.sh) | **new** — submits all 4 jobs with the right dependency edges; `--dry` prints the sbatch commands without submitting |
+| [scripts/run_cross_eval.slurm](../scripts/run_cross_eval.slurm) | **new** — single-process wrapper around `cross_eval.py` (one node, one GPU, ≤2 h walltime) |
+| [scripts/run_qlora.slurm](../scripts/run_qlora.slurm) | `MAX_TRAIN_ROWS` env knob threaded through to `train_qlora.py --max-train-rows` |
+| [scripts/update_manifest.py](../scripts/update_manifest.py) | `manifest_lock()` — fcntl advisory lock around the read-modify-write |
+| [scripts/tillicum_sync.sh](../scripts/tillicum_sync.sh) | `push-data` now recurses into the nested `data/frozen/<dataset>/...` layout (the old `--include='*.jsonl' --exclude='*'` filter blocked directory descent) |
+
+**Manifest race condition — fixed**
+
+The 2026-05-16 entry flagged the `outputs/manifest.csv` race
+(last-writer-wins when concurrent jobs upsert) as worth fixing. Option (1)
+from that entry — an `fcntl.flock` advisory lock — is now in
+[scripts/update_manifest.py:25-65](../scripts/update_manifest.py#L25-L65).
+The lock sibling is `outputs/manifest.csv.lock`, gitignored.
+
+Smoke-tested by spawning two threads that each acquire the lock and sleep
+0.5 s: events arrived `[enter A, exit A, enter B, exit B]` with no
+interleaving. Stays a no-op on Windows (no `fcntl`); macOS/Linux paths both
+have it.
+
+Concurrent submission is now safe — the three train jobs can finish in any
+order without clobbering each others' manifest rows. The cross-eval job is
+already single-process (16 cells iterated sequentially inside one Python
+interpreter) so it doesn't race with itself.
+
+**Launch sequence (Tillicum)**
+
+```bash
+# 0. From local — push code and the frozen JSONLs (raw WNC TSVs and HF
+#    caches stay local; only the deterministic JSONLs need to land on Tillicum).
+scripts/tillicum_sync.sh push-code
+scripts/tillicum_sync.sh push-data
+
+# 1. On Tillicum — kick off the whole sweep.
+ssh $TILLICUM_USER@tillicum.hyak.uw.edu
+cd /gpfs/projects/imt526a/group7
+scripts/launch_cross_eval_sweep.sh --dry   # eyeball the 4 sbatch commands first
+scripts/launch_cross_eval_sweep.sh         # real submission
+squeue -u $USER -t PD,R                     # watch
+
+# 2. After cross-eval finishes — pull results back.
+# Local:
+scripts/tillicum_sync.sh pull-all
+```
+
+The launch script names each job (`babe`, `cajcodes`, `wnc-capped`, `x-eval`)
+and prints the job ids + the watch command. `--dry` mode invents stable
+non-numeric placeholder ids so a mis-formed dependency string is obvious
+visually (`afterok:mock-...:mock-...`) rather than silently looking like a
+real submission.
+
+**Expected output**
+
+After the sweep finishes:
+
+```text
+outputs/
+├── qlora_beads_full/       # already there from 117771
+├── qlora_babe_full/
+├── qlora_cajcodes_full/
+├── qlora_wnc_full/         # 27,263-row train
+├── cross_eval/
+│   ├── qlora_beads_full__on__beads/     # 4 same-dataset cells (redundant
+│   ├── qlora_beads_full__on__babe/      # with the train jobs' eval — harmless,
+│   ├── ...                              # different output dirs)
+│   └── qlora_wnc_full__on__wnc/         # 16 cells total
+└── manifest.csv             # 5 single-dataset rows + 16 cross-eval rows
+```
+
+**Open follow-ups**
+
+- The training-time eval (run by `run_qlora.slurm` step 3) already produces
+  `outputs/qlora_<ds>_full/eval_metrics.json` for the diagonal — it's
+  recomputed by the cross-eval job as
+  `outputs/cross_eval/qlora_<ds>_full__on__<ds>/eval_metrics.json`. Two
+  separate files for the same number is fine (the cross-eval directory's
+  cell is what populates the matrix in the writeup); deduplicating would
+  cost more code than it saves and risks losing the in-job sanity number.
+- Optional: pass `SKIP_EXISTING=1` to `run_cross_eval.slurm` if the user
+  re-runs cross-eval and wants to keep the original cells. Default is
+  `0` (recompute everything) so a code-change rerun produces a coherent
+  matrix.
+
+---
+
+## 2026-05-19 — Multi-dataset pipeline + cross-eval matrix
+
+**What changed**
+
+The pipeline was single-dataset (BEADs only). It now runs over four bias
+datasets — BEADs, BABE, cajcodes/political-bias, WNC — with a uniform
+id/text/label schema, per-dataset frozen splits, and a cross-evaluation
+harness that scores every adapter on every dataset's test set. The goal:
+empirically test whether a model fine-tuned on one bias dataset transfers
+to the others, or whether each dataset is largely about itself.
+
+**Datasets in scope, and what was rejected**
+
+| Dataset | Source | Rows (train/val/test) | Notes |
+| --- | --- | --- | --- |
+| beads | `shainar/BEAD` (existing) | 27,263 / 8,520 / 6,816 | Pre-restructure splits preserved bit-exact |
+| babe | `mediabiasgroup/BABE` (HF, train+test unioned) | 3,296 / 412 / 413 | 80/10/10 stratified |
+| cajcodes | `cajcodes/political-bias` (HF) | 525 / 66 / 66 | 5-class → binary (center=0, else=1); 69% positive |
+| wnc | Pryzant et al. *bias_data.zip* (Dropbox) | 88,328 / 11,041 / 11,041 | Pair → biased(1)+neutral(0); all 3 native files unioned |
+
+**Dropped**: Baly Article-Bias-Prediction and Hyperpartisan-byarticle are
+full-article (~100–1000× longer than BEADs sentences). Mixing article-level
+into a sentence-level cross-eval pool would conflate length distribution
+with dataset identity; the empirical question is cleaner without them.
+Decision recorded against the option to add them back as held-out
+article-level test sets if a later experiment wants that signal.
+
+**New layout** — per-dataset subdir with sizes nested:
+
+```text
+data/frozen/
+├── beads/{splits_manifest.json, sizes/{100,500,1k,5k,full}/{train,val,test}.jsonl}
+├── babe/{splits_manifest.json, full/{train,val,test}.jsonl}
+├── cajcodes/{splits_manifest.json, full/{train,val,test}.jsonl}
+└── wnc/{splits_manifest.json, full/{train,val,test}.jsonl}
+```
+
+`val.jsonl` and `test.jsonl` are copied into every BEADs size dir so each
+size dir is self-contained. Disk cost is trivial; the cross-eval
+orchestrator becomes pathless ("give me the test for dataset X").
+
+Output dirs renamed to match: `outputs/qlora_{100,500,1k,5k,full}/` →
+`outputs/qlora_beads_{100,500,1k,5k,full}/`. The matching `run_name`,
+`inputs.train_jsonl`, and `inputs.splits_manifest` fields in each run's
+`run_meta.json` were rewritten in the same step; SHA256s of historical
+inputs were **not** rewritten (those are still pre-restructure history).
+Tag `pre-restructure-v2-sweep` marks the commit before the move.
+
+**Schema bump: `splits_manifest.json` v1 → v2**
+
+v1 was flat: `splits["train_5k"] = {path, sha256, n, ...}`. v2 nests
+explicit size and role: `sizes["5k"]["train"] = {path, sha256, n, ...}`,
+plus a top-level `dataset` field. Both
+[scripts/train_qlora.py:236-280](../scripts/train_qlora.py#L236-L280) and
+[scripts/verify_splits_manifest.py:60-77](../scripts/verify_splits_manifest.py#L60-L77)
+handle both schemas, so legacy v1 manifests in `data/processed/` (v1
+calibration) still verify.
+
+**Outputs manifest: `train_dataset` + `eval_dataset` columns**
+
+[scripts/update_manifest.py](../scripts/update_manifest.py) gained two new
+columns positioned right after `run_name`. The 5 BEADs sweep runs were
+re-`update_manifest`'d after the rename so they pick up
+`train_dataset=beads, eval_dataset=beads`. Cross-eval cells (rows of the
+form `qlora_{train}_full__on__{eval}`) are distinguished by a different
+`run_name` and stamped with the appropriate dataset values.
+
+**Files that materially changed**
+
+| Path | Change |
+| --- | --- |
+| [scripts/dataset_loaders/](../scripts/dataset_loaders/) | **new** — one `load()` per dataset, returns id/text/label_int |
+| [scripts/freeze_splits.py](../scripts/freeze_splits.py) | dispatch on `--dataset`; writes schema v2 |
+| [scripts/train_qlora.py](../scripts/train_qlora.py) | `--train-dataset` arg; v1+v2 SHA256 verification |
+| [scripts/eval_adapter.py](../scripts/eval_adapter.py) | `--eval-dataset` arg; stamped into `eval_metrics.json` |
+| [scripts/update_manifest.py](../scripts/update_manifest.py) | new columns; path-based inference fallback for legacy runs |
+| [scripts/verify_splits_manifest.py](../scripts/verify_splits_manifest.py) | flattens v1 `splits` + v2 `sizes.{size}.{role}` into one check loop |
+| [scripts/cross_eval.py](../scripts/cross_eval.py) | **new** — orchestrates (adapter × dataset) matrix; writes cells under `outputs/cross_eval/{run}__on__{ds}/` |
+| [scripts/run_qlora.slurm](../scripts/run_qlora.slurm) | parameterized `DATASET + SIZE`; valid combinations enforced |
+| [baselines/tfidf/tfidf_baseline.ipynb](../baselines/tfidf/tfidf_baseline.ipynb) | papermill parameters cell + dataset-aware metrics |
+
+**Headline empirical result — TF-IDF cross-eval matrix (accuracy)**
+
+Run on the new pipeline end-to-end (16 cells, all in
+`baselines/tfidf/runs/`). TF-IDF + LogReg, ngram (1,2), max_features=50k,
+C=1.0, seed=42 — identical recipe to the existing BEADs baseline,
+applied to every (train, test) pair.
+
+| train \ eval | beads | babe | cajcodes | wnc |
+| ---: | ---: | ---: | ---: | ---: |
+| **beads** | **0.767** | 0.407 | 0.697 | 0.504 |
+| **babe** | 0.485 | **0.722** | 0.636 | 0.510 |
+| **cajcodes** | 0.497 | 0.554 | **0.955** | 0.500 |
+| **wnc** | 0.467 | 0.608 | 0.561 | **0.536** |
+
+F1-macro shows the same pattern — diagonals dominate; off-diagonals are
+weak (often *worse* than majority-class). Test-set sizes:
+beads=6,816 · babe=413 · cajcodes=66 · wnc=11,041 (cajcodes' 0.955 is on
+66 rows and is noisy).
+
+**What this means for the project's empirical question**
+
+Even before the QLoRA cross-eval runs, the linear baseline already gives a
+strong signal: **a bias classifier trained on one of these datasets does
+not generalize to the others**. Most off-diagonals sit near or below
+majority-class. The two highest cross-transfers (beads→cajcodes 0.70,
+babe→cajcodes 0.64) likely reflect cajcodes' lexical regularity (it's
+synthetic and short) — not a deeper transfer. The QLoRA matrix will tell
+us whether a 8B-param fine-tune softens this — but the prior is now
+"datasets are siloed."
+
+**Implementation lessons worth keeping**
+
+1. *Name your loader package anything other than `datasets`.* The first
+   draft used `scripts/datasets/`. When you `python scripts/freeze_splits.py`,
+   Python prepends `scripts/` to `sys.path` — and `scripts/datasets/`
+   then shadows the HuggingFace `datasets` library inside the loaders.
+   Renamed to `scripts/dataset_loaders/`; lesson noted in the package
+   docstring so the next person doesn't try to "fix" the naming.
+
+2. *Reproducibility check the migration before deleting the originals.*
+   The new `freeze_splits.py --dataset beads` was first run to `/tmp` and
+   its SHA256s diffed against the pre-restructure `splits_manifest.json`.
+   All 7 hashes matched bit-for-bit — content invariance under the
+   refactor proven. Only then were the flat-layout files removed in the
+   same commit that adds the new layout. Without this guard, a silent
+   change in pandas/sklearn split ordering would have invalidated
+   apples-to-apples comparisons against the pre-rename runs.
+
+3. *Path inference is fragile when the path schema itself changes.*
+   `update_manifest.py` infers `eval_dataset` from the test JSONL path as
+   a fallback. First pass extracted the segment after "frozen" — which on
+   legacy `data/frozen/test_held_out.jsonl` resolved to
+   `"test_held_out.jsonl"` and wrote that string into the manifest. Fix:
+   constrain inferred segments to `{beads, babe, cajcodes, wnc}`, and
+   treat `data/frozen/*.jsonl` (the flat legacy shape) as implicitly
+   beads.
+
+**Verification chain that passed**
+
+1. BEADs SHA256s match pre-restructure (`pre-restructure-v2-sweep` tag) —
+   7/7 splits bit-identical.
+2. All 4 datasets' on-disk JSONLs match their committed manifests
+   (`verify_splits_manifest.py` on each, 24 splits OK).
+3. Loader smoke-test (`load() → DataFrame` for each of the 4) — no nulls,
+   binary labels, unique IDs.
+4. TF-IDF cross-eval (16 cells) ran end-to-end via papermill —
+   matrix above.
+5. `cross_eval.py --dry-run` produced the expected 8 cells when pointed
+   at `outputs/qlora_beads_100` and `outputs/qlora_beads_full` (sanity
+   check on path resolution; no QLoRA cells have been actually evaluated
+   yet — Tillicum job).
+
+**Open follow-ups**
+
+- **HPC: train 3 new adapters** (babe / cajcodes / wnc, full size,
+  Llama-3.1-8B-Instruct, same QLoRA recipe as BEADs). Then run
+  `python scripts/cross_eval.py --adapters outputs/qlora_*_full
+  --eval-datasets beads babe cajcodes wnc` to produce the QLoRA version
+  of the matrix above. 4 trains + 16 evals.
+- **WNC size cap**: WNC's full train pool is 88,328 rows — ~3.2× BEADs'
+  27,263. Either cap WNC at 27k (apples-to-apples comparison) or run it
+  at full size (more data is a confound bundled into the result).
+  Recommendation: cap. Decide before submitting the SLURM job.
+- **cajcodes test set is tiny** (66 rows). Cross-eval rows landing on
+  cajcodes carry wide CIs and should be reported with that caveat in the
+  writeup, not as point estimates.
+- **`update_manifest.py` race condition** is now more painful: 32 QLoRA
+  cross-eval cells if all run concurrently. The 2026-05-16 entry's
+  proposed fixes (file lock or per-run shard + consolidate) are now
+  worth doing. Workaround until then: run cells serially or post-process
+  in a single thread.
+- **Baly + Hyperpartisan** can be added back as article-level held-out
+  test sets without disturbing the sentence-level pool. Loader stubs not
+  written; defer until/unless the writeup wants them.
+
+---
+
 ## 2026-05-16 — Full sweep complete (qlora_100 → qlora_full)
 
 **What ran**
@@ -405,39 +694,62 @@ for, and is what it found in a more extreme form (recall_pos 0.998).
 
 ---
 
-## Standing snapshot (as of 2026-05-16)
+## Standing snapshot (as of 2026-05-19)
 
-**Sweep progress** — all five runs complete (2026-05-16)
+**BEADs sweep** — all five runs complete (2026-05-16; renamed 2026-05-19)
 
 | Run | Train rows | Accuracy | F1_macro | Prec_pos | Recall_pos | Slurm |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| qlora_100 | 100 | 0.4991 | 0.3337 | 0.4992 | 0.9988 | 117767 |
-| qlora_500 | 500 | 0.6844 | 0.6817 | 0.6549 | 0.7778 | 117768 |
-| qlora_1k | 1,000 | 0.6981 | 0.6975 | 0.6811 | 0.7432 | 117769 |
-| qlora_5k | 5,000 | 0.7584 | 0.7584 | 0.7605 | 0.7532 | 117770 |
-| qlora_full | 27,263 | **0.8036** | **0.8035** | 0.8059 | 0.7990 | 117771 |
+| qlora_beads_100 | 100 | 0.4991 | 0.3337 | 0.4992 | 0.9988 | 117767 |
+| qlora_beads_500 | 500 | 0.6844 | 0.6817 | 0.6549 | 0.7778 | 117768 |
+| qlora_beads_1k | 1,000 | 0.6981 | 0.6975 | 0.6811 | 0.7432 | 117769 |
+| qlora_beads_5k | 5,000 | 0.7584 | 0.7584 | 0.7605 | 0.7532 | 117770 |
+| qlora_beads_full | 27,263 | **0.8036** | **0.8035** | 0.8059 | 0.7990 | 117771 |
 
-**Baselines**
+**Cross-eval datasets** — frozen on 2026-05-19, verified against committed manifests
+
+| Dataset | Train / val / test | Class balance (test) | Train splits manifest |
+| --- | ---: | ---: | --- |
+| beads | 27,263 / 8,520 / 6,816 | 50.1% biased | [data/frozen/beads/splits_manifest.json](../data/frozen/beads/splits_manifest.json) |
+| babe | 3,296 / 412 / 413 | 55.7% biased | [data/frozen/babe/splits_manifest.json](../data/frozen/babe/splits_manifest.json) |
+| cajcodes | 525 / 66 / 66 | 69.7% biased | [data/frozen/cajcodes/splits_manifest.json](../data/frozen/cajcodes/splits_manifest.json) |
+| wnc | 88,328 / 11,041 / 11,041 | 50.0% biased | [data/frozen/wnc/splits_manifest.json](../data/frozen/wnc/splits_manifest.json) |
+
+**Cross-eval matrices**
+
+| Method | Status | Where |
+| --- | --- | --- |
+| TF-IDF + LogReg | Complete, 16 cells (4×4) | [baselines/tfidf/runs/](../baselines/tfidf/runs/); matrix in the 2026-05-19 entry |
+| QLoRA (Llama-3.1-8B) | BEADs row complete (×4 evals pending); 3 new adapters not yet trained | Cells will land at `outputs/cross_eval/{run}__on__{ds}/` |
+
+**Baselines (single-dataset, BEADs-on-BEADs anchor)**
 
 | Baseline | Owner | Status |
 | --- | --- | --- |
-| TF-IDF + logistic regression | Abrevaa | Completed 2026-05-15, committed at [baselines/tfidf/](../baselines/tfidf/). acc 0.7675, F1_macro 0.7675 on the same held-out test set. |
+| TF-IDF + logistic regression | Abrevaa | Now part of the cross-eval matrix. BEADs-on-BEADs: acc 0.7675, F1_macro 0.7675 (unchanged from 2026-05-15 single-cell result). |
 | 3-shot Llama-3.1-8B prompting | Ash | Paused — example selection raised label-quality concerns; awaiting Prof. Harker's guidance |
 
 **Open questions / follow-ups**
 
+- **HPC: 3 new QLoRA adapters** (babe / cajcodes / wnc, full size, same
+  recipe as the BEADs sweep) — see the 2026-05-19 entry for the launch
+  command. Then 32 cross-eval cells via `scripts/cross_eval.py`.
+- **WNC size cap decision** — full WNC is 88k rows (~3.2× BEADs full).
+  Cap at 27k for apples-to-apples or run full and treat extra data as a
+  confound. Recommendation: cap.
+- **cajcodes test set is 66 rows** — wide CIs; report cross-eval cells
+  landing on cajcodes with that caveat.
 - 3-shot prompting baseline blocked on label-noise question with the instructor.
-- TF-IDF directory rename + commit (path with space is shell-hostile).
-- Week 8 deliverables: learning-curve plot, qualitative inspection of
-  30–50 disagreement examples (per proposal §5).
+- Week 8 deliverables: learning-curve plot (BEADs; done at commit `965c576`),
+  qualitative inspection of 30–50 disagreement examples (per proposal §5).
 - **Length-sorted batching** would unlock another 2–3× eval speedup
   (estimated 60–90 s/run vs. the current 180 s) by eliminating
   padding waste in random-order batches. Not blocking — current eval
   cost is small relative to training, especially for qlora_full.
-- **Manifest race condition**: `update_manifest.py` is not concurrency-safe.
-  Either add a file lock or have each job write a per-run shard and
-  consolidate post-sweep. Current workaround is to rerun the manifest
-  builder sequentially after the sweep finishes (see 2026-05-16 entry).
+- **Manifest race condition** is now more painful — 32 QLoRA cross-eval
+  cells could collide on `outputs/manifest.csv` if run concurrently. The
+  2026-05-16 entry's proposed fixes (file lock or per-run shard +
+  consolidate) are now worth doing. Workaround: run cells serially.
 - **Model-load cost on Tillicum**: ~9 s on warm GPFS cache (measured
   this round), paid twice because train and eval are separate Python
   processes. Combining them into a single orchestrator would recover

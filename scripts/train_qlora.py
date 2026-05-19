@@ -189,8 +189,13 @@ def main():
                     help="Directory the adapter + metrics will be written to.")
     ap.add_argument("--run-name", required=True,
                     help="Short label for this run (e.g. qlora_5k). Written into run_meta.")
-    ap.add_argument("--splits-manifest", default="data/frozen/splits_manifest.json",
+    ap.add_argument("--splits-manifest", default="data/frozen/beads/splits_manifest.json",
                     help="Path to splits_manifest.json so the run records which frozen splits it used.")
+    ap.add_argument("--train-dataset", default=None,
+                    help="Name of the dataset the train_jsonl was drawn from "
+                         "(e.g. beads/babe/cajcodes/wnc). Stamped into run_meta so "
+                         "the cross-eval manifest can pivot. If omitted, inferred "
+                         "from the train_jsonl path (.../frozen/<dataset>/...).")
     ap.add_argument("--model-name", default="meta-llama/Llama-3.1-8B-Instruct")
     ap.add_argument("--smoke-model-name", default="hf-internal-testing/tiny-random-LlamaForCausalLM")
     ap.add_argument("--max-seq-length", type=int, default=512)
@@ -215,6 +220,19 @@ def main():
     device = pick_device()
     print(f"[train] Device: {device}  smoke: {args.smoke_test}  run: {args.run_name}")
 
+    # Resolve train_dataset: explicit arg → infer from path → "unknown".
+    # Path convention: data/frozen/<dataset>/...
+    train_dataset = args.train_dataset
+    if not train_dataset:
+        parts = Path(args.train_jsonl).resolve().parts
+        if "frozen" in parts:
+            i = parts.index("frozen")
+            if i + 1 < len(parts):
+                train_dataset = parts[i + 1]
+        if not train_dataset:
+            train_dataset = "unknown"
+    print(f"[train] train_dataset = {train_dataset}")
+
     from datasets import Dataset
     try:
         from trl import SFTTrainer, SFTConfig
@@ -236,22 +254,52 @@ def main():
     # Catch silent split drift: if the manifest knows about this split, the file's
     # actual sha256 must match. The slurm launcher does a broader check across all
     # splits via verify_splits_manifest.py; this guard covers direct invocation.
+    #
+    # Supports both schema versions:
+    #   v1 — flat: {"splits": {"<name>": {"path": "<file.jsonl>", "sha256": ...}}}
+    #   v2 — nested: {"sizes": {"<size>": {"train"|"val"|"test": {"path": "<rel>", "sha256": ...}}}}
     splits_manifest_path = Path(args.splits_manifest)
     if splits_manifest_path.exists():
         manifest_data = json.loads(splits_manifest_path.read_text())
-        for split_name, info in (manifest_data.get("splits") or {}).items():
-            if info.get("path") == train_path.name:
-                expected_sha = info.get("sha256")
-                if expected_sha and expected_sha != train_sha:
-                    sys.exit(
-                        f"[train] sha256 mismatch for {train_path}:\n"
-                        f"  expected (manifest {splits_manifest_path}, split {split_name}): {expected_sha}\n"
-                        f"  actual:                                                          {train_sha}\n"
-                        f"  Splits drifted from the committed manifest. Rebuild via "
-                        f"scripts/freeze_splits.py and rerun scripts/verify_splits_manifest.py."
-                    )
-                print(f"[train] Verified train_jsonl sha256 matches manifest split '{split_name}'")
+        manifest_dir = splits_manifest_path.parent
+        train_path_resolved = train_path.resolve()
+        verified = False
+        # v2: enumerate (size, role) entries
+        for size_name, size_block in (manifest_data.get("sizes") or {}).items():
+            if verified:
                 break
+            for role, info in size_block.items():
+                rel = info.get("path")
+                if not rel:
+                    continue
+                if (manifest_dir / rel).resolve() == train_path_resolved:
+                    expected_sha = info.get("sha256")
+                    if expected_sha and expected_sha != train_sha:
+                        sys.exit(
+                            f"[train] sha256 mismatch for {train_path}:\n"
+                            f"  expected (manifest {splits_manifest_path}, {size_name}/{role}): {expected_sha}\n"
+                            f"  actual:                                                          {train_sha}\n"
+                            f"  Splits drifted from the committed manifest. Rebuild via "
+                            f"scripts/freeze_splits.py and rerun scripts/verify_splits_manifest.py."
+                        )
+                    print(f"[train] Verified train_jsonl sha256 matches manifest {size_name}/{role}")
+                    verified = True
+                    break
+        # v1 fallback
+        if not verified:
+            for split_name, info in (manifest_data.get("splits") or {}).items():
+                if info.get("path") == train_path.name:
+                    expected_sha = info.get("sha256")
+                    if expected_sha and expected_sha != train_sha:
+                        sys.exit(
+                            f"[train] sha256 mismatch for {train_path}:\n"
+                            f"  expected (manifest {splits_manifest_path}, split {split_name}): {expected_sha}\n"
+                            f"  actual:                                                          {train_sha}\n"
+                            f"  Splits drifted from the committed manifest. Rebuild via "
+                            f"scripts/freeze_splits.py and rerun scripts/verify_splits_manifest.py."
+                        )
+                    print(f"[train] Verified train_jsonl sha256 matches manifest split '{split_name}'")
+                    break
 
     rows = load_jsonl(train_path)
     if args.max_train_rows > 0:
@@ -431,6 +479,7 @@ def main():
             "splits_manifest": str(splits_manifest_path) if splits_manifest_path.exists() else None,
             "splits_manifest_sha256": splits_manifest_sha,
             "splits_label_map": splits_manifest_label_map,
+            "train_dataset": train_dataset,
         },
         "outputs": {
             "adapter_path": str(adapter_path),

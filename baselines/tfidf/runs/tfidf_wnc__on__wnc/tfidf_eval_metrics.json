@@ -1,0 +1,16 @@
+{
+  "run_name": "tfidf_wnc__on__wnc",
+  "train_dataset": "wnc",
+  "eval_dataset": "wnc",
+  "n_examples": 11041,
+  "accuracy": 0.5356398876913323,
+  "precision_pos": 0.5403905447070915,
+  "recall_pos": 0.476268115942029,
+  "f1_pos": 0.5063071738083774,
+  "f1_macro": 0.533994828248123,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased       0.53      0.60      0.56      5521\n      biased       0.54      0.48      0.51      5520\n\n    accuracy                           0.54     11041\n   macro avg       0.54      0.54      0.53     11041\nweighted avg       0.54      0.54      0.53     11041\n",
+  "eval_seconds": 4.488420248031616,
+  "smoke_test": false,
+  "adapter_path": null,
+  "test_jsonl": "../../data/frozen/wnc/full/test.jsonl"
+}

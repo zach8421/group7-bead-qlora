@@ -58,18 +58,30 @@ def main() -> int:
         return 2
 
     ref = json.loads(ref_path.read_text())
-    splits = ref.get("splits") or {}
-    if not splits:
-        print(f"[verify] reference manifest has no 'splits' entries: {ref_path}", file=sys.stderr)
+
+    # Flatten both schemas into a list of (name, path, sha256) triples.
+    #   v1: ref["splits"][<name>] = {"path": ..., "sha256": ...}
+    #   v2: ref["sizes"][<size>][<role>] = {"path": ..., "sha256": ...}
+    triples: list[tuple[str, str, str | None]] = []
+    if ref.get("splits"):
+        for name, info in ref["splits"].items():
+            triples.append((name, info.get("path"), info.get("sha256")))
+    elif ref.get("sizes"):
+        for size_name, size_block in ref["sizes"].items():
+            for role, info in size_block.items():
+                triples.append((f"{size_name}/{role}", info.get("path"), info.get("sha256")))
+    else:
+        print(
+            f"[verify] reference manifest has no 'splits' (v1) or 'sizes' (v2) entries: {ref_path}",
+            file=sys.stderr,
+        )
         return 2
 
     mismatches: list[str] = []
     missing: list[str] = []
     ok: list[str] = []
 
-    for name, info in splits.items():
-        rel = info.get("path")
-        expected = info.get("sha256")
+    for name, rel, expected in triples:
         if not rel or not expected:
             mismatches.append(f"{name}: manifest entry missing 'path' or 'sha256'")
             continue

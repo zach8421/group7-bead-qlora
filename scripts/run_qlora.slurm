@@ -1,16 +1,24 @@
 #!/bin/bash
-# QLoRA sweep launcher. Pick the training size with SIZE=100|500|1k|5k|full
-# and (optionally) EPOCHS=N. Defaults: SIZE=1k, EPOCHS=3.
+# QLoRA sweep launcher. Picks the training (DATASET, SIZE) cell.
+#
+#   DATASET ∈ {beads,babe,cajcodes,wnc}   (default: beads)
+#   SIZE    — BEADs only: 100|500|1k|5k|full;  others: full
+#   EPOCHS  — float (default 3)
 #
 # Submit examples:
-#   sbatch --export=ALL,SIZE=100  --time=00:30:00 scripts/run_qlora.slurm
-#   sbatch --export=ALL,SIZE=500  --time=00:45:00 scripts/run_qlora.slurm
-#   sbatch --export=ALL,SIZE=1k   --time=01:00:00 scripts/run_qlora.slurm
-#   sbatch --export=ALL,SIZE=5k   --time=02:00:00 scripts/run_qlora.slurm
-#   sbatch --export=ALL,SIZE=full --time=05:00:00 scripts/run_qlora.slurm
+#   sbatch --export=ALL,DATASET=beads,SIZE=100  --time=00:30:00 scripts/run_qlora.slurm
+#   sbatch --export=ALL,DATASET=beads,SIZE=full --time=05:00:00 scripts/run_qlora.slurm
+#   sbatch --export=ALL,DATASET=babe,SIZE=full  --time=01:00:00 scripts/run_qlora.slurm
+#   sbatch --export=ALL,DATASET=cajcodes,SIZE=full --time=00:30:00 scripts/run_qlora.slurm
+#   sbatch --export=ALL,DATASET=wnc,SIZE=full,MAX_TRAIN_ROWS=27263 --time=04:00:00 scripts/run_qlora.slurm
 #
-# The launcher: prepares splits if missing, trains, evals on test_held_out,
-# and updates outputs/manifest.csv via scripts/update_manifest.py.
+# MAX_TRAIN_ROWS caps the loaded train set to the first N rows after shuffle.
+# Use for WNC (88k native) to match BEADs full (27,263) and keep cross-eval
+# apples-to-apples — see docs/build_log.md 2026-05-19 entry.
+#
+# The launcher: prepares splits if missing, trains, evals on the same-dataset
+# test set (cross-eval is run separately via scripts/cross_eval.py), and
+# updates outputs/manifest.csv via scripts/update_manifest.py.
 
 #SBATCH --job-name=bead-qlora-sweep
 #SBATCH --account=group7
@@ -24,29 +32,46 @@ set -euo pipefail
 mkdir -p logs
 
 # ---- Knobs from the submitter ----
-SIZE="${SIZE:-1k}"
+DATASET="${DATASET:-beads}"
+SIZE="${SIZE:-full}"
 EPOCHS="${EPOCHS:-3}"
 PER_DEVICE_BS="${PER_DEVICE_BS:-4}"
 GRAD_ACCUM="${GRAD_ACCUM:-4}"
 MAX_SEQ_LEN="${MAX_SEQ_LEN:-512}"
-EVAL_ROWS="${EVAL_ROWS:-0}"  # 0 = full test_held_out (6816); >0 = subset (smoke)
+EVAL_ROWS="${EVAL_ROWS:-0}"  # 0 = full test set; >0 = subset (smoke)
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"  # sequences per forward; 2 per test row
+MAX_TRAIN_ROWS="${MAX_TRAIN_ROWS:-0}"  # 0 = full train.jsonl; >0 = cap (e.g. wnc apples-to-apples)
 
-case "$SIZE" in
-  100)   TRAIN_FILE="data/frozen/train_100.jsonl" ;;
-  500)   TRAIN_FILE="data/frozen/train_500.jsonl" ;;
-  1k)    TRAIN_FILE="data/frozen/train_1k.jsonl" ;;
-  5k)    TRAIN_FILE="data/frozen/train_5k.jsonl" ;;
-  full)  TRAIN_FILE="data/frozen/train_full.jsonl" ;;
-  *)     echo "Unknown SIZE='$SIZE'. Use 100|500|1k|5k|full." >&2; exit 2 ;;
+case "$DATASET" in
+  beads|babe|cajcodes|wnc) ;;
+  *) echo "Unknown DATASET='$DATASET'. Use beads|babe|cajcodes|wnc." >&2; exit 2 ;;
 esac
 
-# Intermediate checkpoints only for the longest run. 27,263 examples with
-# effective batch 16 ⇒ ~1,700 steps/epoch × 3 epochs ≈ 5,100 steps. Saving
-# every 800 steps gives roughly one checkpoint per ~30 min of wall-clock on
-# the H200 (per the v1 calibration projection of ~2.5h total), so a node
-# failure costs at most ~30 min of compute.
-if [[ "$SIZE" == "full" ]]; then
+# Layout convention:
+#   beads has multiple sizes; the other three only have 'full'.
+if [[ "$DATASET" == "beads" ]]; then
+  case "$SIZE" in
+    100|500|1k|5k|full) ;;
+    *) echo "Unknown SIZE='$SIZE' for beads. Use 100|500|1k|5k|full." >&2; exit 2 ;;
+  esac
+  SIZE_DIR="sizes/${SIZE}"
+else
+  if [[ "$SIZE" != "full" ]]; then
+    echo "DATASET=$DATASET only has 'full' size; got SIZE=$SIZE." >&2; exit 2
+  fi
+  SIZE_DIR="full"
+fi
+
+FROZEN_ROOT="data/frozen/${DATASET}"
+TRAIN_FILE="${FROZEN_ROOT}/${SIZE_DIR}/train.jsonl"
+TEST_FILE="${FROZEN_ROOT}/${SIZE_DIR}/test.jsonl"
+COMMITTED_MANIFEST="${FROZEN_ROOT}/splits_manifest.json"
+
+# Intermediate checkpoints only for the longest runs (~5k steps+). Skip for
+# small subsets since each is well under an hour. Saving every 800 steps gives
+# roughly one checkpoint per ~30 min on the H200, so a node failure costs at
+# most ~30 min of compute.
+if [[ "$SIZE" == "full" && ("$DATASET" == "beads" || "$DATASET" == "wnc") ]]; then
   SAVE_STEPS="${SAVE_STEPS:-800}"
   SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-2}"
 else
@@ -54,9 +79,8 @@ else
   SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-2}"
 fi
 
-RUN_NAME="qlora_${SIZE}"
+RUN_NAME="qlora_${DATASET}_${SIZE}"
 OUTPUT_DIR="outputs/${RUN_NAME}"
-TEST_FILE="data/frozen/test_held_out.jsonl"
 MANIFEST="outputs/manifest.csv"
 
 # ---- Environment ----
@@ -100,45 +124,51 @@ nvidia-smi || true
 #    bytes hash to the sha256s recorded in the committed splits_manifest.json.
 #    This is the only thing standing between us and a silently-drifted test set
 #    (which would invalidate cross-method comparisons against TF-IDF / 3-shot).
-COMMITTED_MANIFEST="data/frozen/splits_manifest.json"
 if [[ -f "$COMMITTED_MANIFEST" ]]; then
   REF_MANIFEST_SNAPSHOT="$(mktemp -t splits_manifest_committed.XXXXXX.json)"
   cp "$COMMITTED_MANIFEST" "$REF_MANIFEST_SNAPSHOT"
   trap 'rm -f "$REF_MANIFEST_SNAPSHOT"' EXIT
 
   if [[ ! -f "$TRAIN_FILE" || ! -f "$TEST_FILE" ]]; then
-    echo "[slurm] Frozen splits missing — running freeze_splits.py ..."
-    python scripts/freeze_splits.py --csv-dir data/bead --out-dir data/frozen
+    echo "[slurm] Frozen splits missing — running freeze_splits.py --dataset $DATASET ..."
+    python scripts/freeze_splits.py --dataset "$DATASET"
   fi
 
   echo "[slurm] Verifying on-disk splits against committed manifest ..."
   python scripts/verify_splits_manifest.py \
-    --frozen-dir data/frozen \
+    --frozen-dir "$FROZEN_ROOT" \
     --reference-manifest "$REF_MANIFEST_SNAPSHOT"
 else
   echo "[slurm] WARNING: $COMMITTED_MANIFEST not present — building from scratch with no reference to verify against." >&2
   if [[ ! -f "$TRAIN_FILE" || ! -f "$TEST_FILE" ]]; then
-    python scripts/freeze_splits.py --csv-dir data/bead --out-dir data/frozen
+    python scripts/freeze_splits.py --dataset "$DATASET"
   fi
 fi
 
 # 2. Train.
 echo "[slurm] Training $RUN_NAME ..."
-python scripts/train_qlora.py \
-  --train-jsonl "$TRAIN_FILE" \
-  --output-dir "$OUTPUT_DIR" \
-  --run-name "$RUN_NAME" \
-  --per-device-batch-size "$PER_DEVICE_BS" \
-  --grad-accum "$GRAD_ACCUM" \
-  --max-seq-length "$MAX_SEQ_LEN" \
-  --num-epochs "$EPOCHS" \
-  --save-steps "$SAVE_STEPS" \
-  --save-total-limit "$SAVE_TOTAL_LIMIT"
+TRAIN_ARGS=( --train-jsonl "$TRAIN_FILE" \
+             --output-dir "$OUTPUT_DIR" \
+             --run-name "$RUN_NAME" \
+             --train-dataset "$DATASET" \
+             --splits-manifest "$COMMITTED_MANIFEST" \
+             --per-device-batch-size "$PER_DEVICE_BS" \
+             --grad-accum "$GRAD_ACCUM" \
+             --max-seq-length "$MAX_SEQ_LEN" \
+             --num-epochs "$EPOCHS" \
+             --save-steps "$SAVE_STEPS" \
+             --save-total-limit "$SAVE_TOTAL_LIMIT" )
+if [[ "$MAX_TRAIN_ROWS" -gt 0 ]]; then
+  echo "[slurm] Capping training rows at $MAX_TRAIN_ROWS"
+  TRAIN_ARGS+=( --max-train-rows "$MAX_TRAIN_ROWS" )
+fi
+python scripts/train_qlora.py "${TRAIN_ARGS[@]}"
 
-# 3. Eval on held-out test.
+# 3. Eval on held-out test (same dataset). Cross-eval runs separately.
 echo "[slurm] Evaluating $RUN_NAME on $TEST_FILE ..."
 EVAL_ARGS=( --adapter-path "$OUTPUT_DIR/adapter" \
             --test-jsonl "$TEST_FILE" \
+            --eval-dataset "$DATASET" \
             --output-dir "$OUTPUT_DIR" \
             --run-name "$RUN_NAME" \
             --eval-batch-size "$EVAL_BATCH_SIZE" )
