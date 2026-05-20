@@ -9,6 +9,176 @@ use the `run_meta.json` files in `outputs/<run>/`.
 
 ---
 
+## 2026-05-19 — BEADs label-audit tool + cleaning experiment plan
+
+**What this adds**
+
+A tool to spot-check BEADs's gold labels using the four cross-eval
+adapters as independent voters, plus a pre-registered plan to
+hand-label a held-out sample and test whether algorithmically
+cleaning BEADs's training data improves model accuracy. Sets up the
+Week 8 "qualitative inspection" deliverable in a way that produces a
+quantitative result in the same pass.
+
+**The tool**
+
+[scripts/beads_spot_check.py](../scripts/beads_spot_check.py) joins the
+four ``outputs/cross_eval/qlora_<ds>_full__on__beads/predictions.jsonl``
+files into a single share-ready CSV (default:
+``beads_label_audit.csv`` in the repo root, regenerable, not gitted).
+
+Output schema:
+
+| Column | Meaning |
+| --- | --- |
+| `row_idx` | Position in BEADs test (stable ID across files) |
+| `verdict` | One of `mislabel_likely_missed_bias`, `mislabel_likely_over_called_bias`, `agree_biased`, `agree_clean`, `mixed` |
+| `confidence` | Mean per-adapter log-odds margin (decisiveness, not vote direction) |
+| `text` | BEADs sentence |
+| `gold_label` | What BEADs's official label says (`biased` / `non-biased`) |
+| `pred_{beads,babe,cajcodes,wnc}` | Each adapter's prediction |
+| `non_beads_vote` | Consensus of BABE + cajcodes + WNC only (BEADs adapter excluded so this is *independent* of BEADs's training signal). One of `biased` / `non-biased` / `split`. |
+| `models_disagreeing_with_gold` | 0-4 |
+
+Sort: most-actionable verdicts first, then confidence within bucket.
+
+**The signal the audit surfaces**
+
+Verdict breakdown across the 6,816-row BEADs test split:
+
+| Verdict | Count | % |
+| --- | ---: | ---: |
+| `mislabel_likely_missed_bias` | 276 | 4.0% |
+| `mislabel_likely_over_called_bias` | 36 | 0.5% |
+| `mixed` (partial disagreement) | 5,605 | 82.2% |
+| `agree_biased` | 834 | 12.2% |
+| `agree_clean` | 65 | **1.0%** |
+
+The 65 rows of confirmed-clean labels is the striking number — out of
+~3,400 test rows where BEADs says `non-biased`, only 2% have all four
+adapters confirming "yes this is clean." Compare to ~25% for biased.
+**BEADs's `non-biased` category is much noisier than its `biased`
+category.**
+
+The stronger framing comes from `non_beads_vote` — the independent
+ensemble (BABE + cajcodes + WNC, no BEADs adapter):
+
+| non_beads_vote | vs gold | Count |
+| ---: | --- | ---: |
+| biased | gold = biased | 1,203 |
+| **biased** | **gold = non-biased** | **2,135**  *(BEADs missed bias)* |
+| non-biased | gold = biased | 450  *(BEADs over-called)* |
+| non-biased | gold = non-biased | 133 |
+| split | (either gold) | 2,895 |
+
+So when three adapters trained on three *different* bias datasets all
+agree with each other (3,921 rows, 57% of the test set), they reject
+BEADs's gold label on **2,585 of those rows — 66%**. The BEADs adapter
+itself isn't part of this vote, so the signal is genuinely
+independent of BEADs's labelers.
+
+**The asymmetry that matters for the writeup**
+
+BEADs missed bias **~5× more often** than it over-called it: 2,135 rows
+where the independent ensemble says biased + BEADs says clean, vs 450
+in the opposite direction. If hand-labeling confirms this ratio, the
+writeup story is "BEADs's `non-biased` category is essentially a
+catch-all that under-labels bias by a large margin."
+
+**Methodological caveat — why this isn't yet a finding**
+
+The 2,585 "candidate mislabel" count is the **maximum plausible**
+signal, not a validated count. Each of the three non-BEADs adapters
+individually scores ≤ 0.46 accuracy on BEADs (worse than chance — see
+[2026-05-19 cross-eval entry](#2026-05-19--qlora-cross-eval-matrix-complete-the-headline-result)).
+They're noisy. The argument for treating their *agreement* as signal
+is that they each fail differently — when babe, cajcodes, and WNC
+agree, the agreement is likely on a shared feature rather than each
+model's idiosyncratic noise.
+
+But "likely" needs validation. The signal could also be that all three
+datasets share a *different notion of bias* than BEADs (a
+construct-validity issue, not a noise issue). The hand-labeling step
+distinguishes those.
+
+**The planned experiment**
+
+Pre-registered before any cleaning is computed on the BEADs train pool:
+
+1. **Sample**: 500 random rows from BEADs test, stratified 250/250 by gold
+   label (because the noise is asymmetric — uniform sampling would
+   under-represent the noisier `non-biased` rows).
+2. **Hand-label** with a team of 3:
+   - Each labeler gets 200 rows (150 unique + 50 shared block for IAA).
+   - The 50 IAA rows are randomly interleaved with each labeler's
+     unique 150 so they don't know which rows are shared.
+   - Blind: no gold label, no model predictions shown during labeling.
+   - Written protocol with edge-case rules agreed *before* labeling
+     begins (mitigates the obvious IAA-suppression failure mode).
+3. **IAA gate**: pairwise agreement on the 50 shared rows ≥ 75%, or
+   stop and recalibrate.
+4. **Three measurements against the consensus hand-labels**:
+   - BEADs gold mislabel rate (the headline statistic)
+   - `qlora_beads_full` true accuracy (vs the 0.7987 against noisy gold)
+   - Cross-dataset ensemble flip-correctness on flagged rows
+     (validates whether the ensemble's *which-label* judgment is
+     reliable enough to use for re-labeling, not just removal)
+5. **Pre-registered cleaning flag** (decided before computing on train):
+   conservative rule — `cross_unanimous_disagree == 1 AND
+   beads_self_disagrees_with_gold == 1`. The flag is structural; the
+   *action* (remove vs flip) is conditional on step (4)'s flip-correctness:
+   - ≥ 75%: both remove and flip retrains run (three-way comparison)
+   - 60-75%: only remove
+   - < 60%: skip the retrain step; the noise-detection result stands alone
+6. **Retrain** the `qlora_{100, 500, 1k, 5k, full}` sweep on cleaned
+   train, then evaluate the new sweep against the 500 hand-labeled rows
+   (not against the noisy BEADs test — that would be moving the
+   goalposts).
+7. **Success criterion** (pre-registered): cleaned-data `qlora_full`
+   accuracy on the 500 hand-labels exceeds original-data `qlora_full`
+   accuracy by **≥ 2× the IAA disagreement rate**. So if IAA agreement
+   is 90% (disagreement rate 10%), the lift has to be ≥ 20 percentage
+   points to count. Intentionally strict — claims of model improvement
+   should exceed the noise floor of the ground truth itself, and the
+   2× multiplier gives a margin for finite-sample noise on a 500-row
+   evaluation.
+
+What this experiment can produce:
+
+| Outcome | What it tells the writeup |
+| --- | --- |
+| Cleaning improves lift on hand-labels | "BEADs noise is real and addressable; ensemble-cleaning is a viable BEADs auto-cleaner." Strong story. |
+| Cleaning has no effect | "Either BEADs noise is structured such that QLoRA learns through it, or our ensemble flag captures something other than label noise (a different construct of bias)." Still a finding. |
+| Cleaning hurts | "Removing/flipping flagged rows removes useful hard cases the decision boundary depends on, or the flagged rows weren't actually mislabels." A negative result worth reporting. |
+
+**Decisions still open**
+
+- Whether to extend predictions to BEADs train + val (42,599 rows total
+  vs the 6,816 test rows the audit currently covers). Required for the
+  cleaning step but not for hand-labeling. Estimated ~$2-3 in Tillicum
+  compute, ~30-45 min wall. Can be submitted while hand-labeling
+  happens in parallel.
+- Whether to run the full `qlora_{100, 500, 1k, 5k, full}` sweep on
+  cleaned data (~$10) or just `qlora_full` (~$3.60). The full sweep
+  shows whether cleaning matters more at low vs high data, which is
+  probably the more interesting finding.
+- The pre-registered cleaning rule's "AND beads_self_disagrees" clause
+  is the conservative version (~8% of train flagged). The aggressive
+  alternative is just `cross_unanimous_disagree == 1` (~38% of train).
+  Conservative is the default; if hand-labels suggest BEADs's noise
+  rate is very high, switching to aggressive may be justified.
+
+**Where the artifacts live**
+
+- [scripts/beads_spot_check.py](../scripts/beads_spot_check.py) — the
+  tool (commit `28a3614`).
+- `beads_label_audit.csv` (regenerable, not gitted) — the
+  share-with-teammates CSV.
+- [outputs/cross_eval/qlora_*_full__on__beads/predictions.jsonl](../outputs/cross_eval/)
+  — the per-row predictions the audit is built from.
+
+---
+
 ## 2026-05-19 — QLoRA cross-eval matrix complete (the headline result)
 
 **TL;DR**
