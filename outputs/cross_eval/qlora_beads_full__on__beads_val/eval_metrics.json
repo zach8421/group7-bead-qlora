@@ -1,0 +1,17 @@
+{
+  "run_name": "qlora_beads_full__on__beads_val",
+  "eval_dataset": "beads",
+  "n_examples": 8520,
+  "accuracy": 0.7976525821596244,
+  "precision_pos": 0.7979274611398963,
+  "recall_pos": 0.7964268923366243,
+  "f1_pos": 0.7971764705882353,
+  "f1_macro": 0.7976514671442347,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.7974    0.7989    0.7981      4266\n      biased     0.7979    0.7964    0.7972      4254\n\n    accuracy                         0.7977      8520\n   macro avg     0.7977    0.7977    0.7977      8520\nweighted avg     0.7977    0.7977    0.7977      8520\n",
+  "eval_seconds": 219.937,
+  "eval_forward_seconds": 215.333,
+  "eval_batch_size": 16,
+  "smoke_test": false,
+  "adapter_path": "outputs/qlora_beads_full/adapter",
+  "test_jsonl": "data/frozen/beads/sizes/full/val.jsonl"
+}

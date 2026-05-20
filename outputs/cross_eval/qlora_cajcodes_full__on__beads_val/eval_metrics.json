@@ -1,0 +1,17 @@
+{
+  "run_name": "qlora_cajcodes_full__on__beads_val",
+  "eval_dataset": "beads",
+  "n_examples": 8520,
+  "accuracy": 0.41807511737089204,
+  "precision_pos": 0.45132743362831856,
+  "recall_pos": 0.767277856135402,
+  "f1_pos": 0.5683440710430089,
+  "f1_macro": 0.33782705892805825,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.2314    0.0699    0.1073      4266\n      biased     0.4513    0.7673    0.5683      4254\n\n    accuracy                         0.4181      8520\n   macro avg     0.3413    0.4186    0.3378      8520\nweighted avg     0.3412    0.4181    0.3375      8520\n",
+  "eval_seconds": 218.793,
+  "eval_forward_seconds": 214.215,
+  "eval_batch_size": 16,
+  "smoke_test": false,
+  "adapter_path": "outputs/qlora_cajcodes_full/adapter",
+  "test_jsonl": "data/frozen/beads/sizes/full/val.jsonl"
+}
