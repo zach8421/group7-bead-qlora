@@ -131,15 +131,29 @@ thresholds.
    a row is flagged whenever all three non-BEADs adapters (BABE,
    cajcodes, WNC) agree with each other against BEADs gold. The BEADs
    adapter's vote is *not* required (it trained on the gold so its
-   agreement is partly tautological).
-   - **Measured on test**: 2,585 of 6,816 rows = 37.9% flagged.
-   - **Expected on train** (extrapolation, not measurement):
-     ~10,340 of 27,263 rows. The actual count becomes known when the
-     4 adapters are run on the train pool (open decision item below).
-   The extrapolation assumes BEADs train and test have similar
-   underlying noise (true under the stratified split that produced
-   them) and that the non-BEADs adapters predict similarly on both
-   (they never saw either split, so this is also fair).
+   agreement is partly tautological). The four adapters were run on
+   BEADs train + val via
+   [scripts/predict_beads_train_val.slurm](../scripts/predict_beads_train_val.slurm)
+   (~$1, ~65 min wall) to produce the measurements below.
+
+   | Split | Total | Flagged | Rate | Missed bias | Over-called | Asymmetry |
+   | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+   | train | 27,263 | **10,371** | 38.0% | 8,450 | 1,921 | 4.4:1 |
+   | val   |  8,520 |  3,178 | 37.3% | 2,611 |   567 | 4.6:1 |
+   | test  |  6,816 |  2,585 | 37.9% | 2,135 |   450 | 4.7:1 |
+
+   Three takeaways:
+   - **The cleaned train set will have 16,892 rows** (27,263 − 10,371),
+     ~62% of the original pool.
+   - **Flag rate is essentially identical across train / val / test**
+     (37.3-38.0%). The earlier extrapolation from test (37.9%) is
+     within 0.7 pp of the measured train rate — the noise is uniformly
+     distributed, not split-specific.
+   - **The 4.4-4.7:1 missed-bias asymmetry holds across all three
+     splits.** BEADs systematically under-labels biased content in
+     its `non-biased` category. This is a structural property of the
+     dataset, not a sampling artifact — worth its own sentence in the
+     writeup.
 
    The cleaning *action* (remove vs flip) is conditional on step (4)'s
    flip-correctness:
@@ -180,11 +194,13 @@ What this experiment can produce:
 
 **Decisions still open**
 
-- Predictions on BEADs train + val (the audit currently covers only
-  the 6,816 test rows). Required to flag the 27,263 train rows for
-  cleaning. Estimated ~$2-3 in Tillicum compute, ~30-45 min wall. Can
-  be submitted while hand-labeling happens in parallel — these are
-  independent paths.
+The cleaning rule has been applied. What remains is conditional on the
+hand-labels:
+
+- Whether to **remove** vs **flip** vs **skip** flagged rows, gated by
+  the ensemble's flip-correctness on the 500 hand-labeled rows. Can
+  only be answered once labeling is done.
+- Whether the success criterion is met. Same dependency.
 
 **Budget at-pinned-numbers**
 
