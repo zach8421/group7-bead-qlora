@@ -1,0 +1,17 @@
+{
+  "run_name": "qlora_beads_full__on__cajcodes",
+  "eval_dataset": "cajcodes",
+  "n_examples": 66,
+  "accuracy": 0.6666666666666666,
+  "precision_pos": 0.6875,
+  "recall_pos": 0.9565217391304348,
+  "f1_pos": 0.8,
+  "f1_macro": 0.4,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.0000    0.0000    0.0000        20\n      biased     0.6875    0.9565    0.8000        46\n\n    accuracy                         0.6667        66\n   macro avg     0.3438    0.4783    0.4000        66\nweighted avg     0.4792    0.6667    0.5576        66\n",
+  "eval_seconds": 1.375,
+  "eval_forward_seconds": 1.323,
+  "eval_batch_size": 16,
+  "smoke_test": false,
+  "adapter_path": "/gpfs/projects/imt526a/group7/outputs/qlora_beads_full/adapter",
+  "test_jsonl": "/gpfs/projects/imt526a/group7/data/frozen/cajcodes/full/test.jsonl"
+}

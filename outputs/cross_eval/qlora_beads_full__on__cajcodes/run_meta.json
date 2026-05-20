@@ -1,5 +1,5 @@
 {
-  "run_name": "qlora_beads_full",
+  "run_name": "qlora_beads_full__on__cajcodes",
   "smoke_test": false,
   "args": {
     "train_jsonl": "data/frozen/beads/sizes/full/train.jsonl",

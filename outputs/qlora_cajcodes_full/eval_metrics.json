@@ -1,0 +1,17 @@
+{
+  "run_name": "qlora_cajcodes_full",
+  "eval_dataset": "cajcodes",
+  "n_examples": 66,
+  "accuracy": 0.9696969696969697,
+  "precision_pos": 1.0,
+  "recall_pos": 0.9565217391304348,
+  "f1_pos": 0.9777777777777777,
+  "f1_macro": 0.965079365079365,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.9091    1.0000    0.9524        20\n      biased     1.0000    0.9565    0.9778        46\n\n    accuracy                         0.9697        66\n   macro avg     0.9545    0.9783    0.9651        66\nweighted avg     0.9725    0.9697    0.9701        66\n",
+  "eval_seconds": 1.267,
+  "eval_forward_seconds": 1.223,
+  "eval_batch_size": 16,
+  "smoke_test": false,
+  "adapter_path": "outputs/qlora_cajcodes_full/adapter",
+  "test_jsonl": "data/frozen/cajcodes/full/test.jsonl"
+}

@@ -1,5 +1,5 @@
 {
-  "run_name": "qlora_beads_full",
+  "run_name": "qlora_wnc_full__on__babe",
   "smoke_test": false,
   "model_name": "meta-llama/Llama-3.1-8B-Instruct",
   "device": "cuda",
@@ -13,12 +13,12 @@
   "learning_rate": 0.0002,
   "trainable_params": 41943040,
   "total_params": 4582543360,
-  "wall_clock_sec": 5944.454,
-  "wall_clock_min": 99.074,
-  "peak_cuda_memory_gb": 14.571,
-  "train_loss_final": 1.1558213279653975,
+  "wall_clock_sec": 5858.722,
+  "wall_clock_min": 97.645,
+  "peak_cuda_memory_gb": 13.533,
+  "train_loss_final": 0.67850294084243,
   "global_steps": 5112,
-  "throughput_examples_per_sec": 13.759,
-  "adapter_path": "outputs/qlora_beads_full/adapter",
+  "throughput_examples_per_sec": 13.96,
+  "adapter_path": "outputs/qlora_wnc_full/adapter",
   "seed": 42
 }

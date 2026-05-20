@@ -1,12 +1,12 @@
 {
-  "run_name": "qlora_beads_full",
+  "run_name": "qlora_wnc_full__on__cajcodes",
   "smoke_test": false,
   "args": {
-    "train_jsonl": "data/frozen/beads/sizes/full/train.jsonl",
-    "output_dir": "outputs/qlora_beads_full",
-    "run_name": "qlora_beads_full",
-    "splits_manifest": "data/frozen/beads/splits_manifest.json",
-    "train_dataset": "beads",
+    "train_jsonl": "data/frozen/wnc/full/train.jsonl",
+    "output_dir": "outputs/qlora_wnc_full",
+    "run_name": "qlora_wnc_full",
+    "splits_manifest": "data/frozen/wnc/splits_manifest.json",
+    "train_dataset": "wnc",
     "model_name": "meta-llama/Llama-3.1-8B-Instruct",
     "smoke_model_name": "hf-internal-testing/tiny-random-LlamaForCausalLM",
     "max_seq_length": 512,
@@ -19,16 +19,16 @@
     "save_total_limit": 2,
     "seed": 42,
     "smoke_test": false,
-    "max_train_rows": 0
+    "max_train_rows": 27263
   },
-  "started_at": "2026-05-19T22:32:08.616658+00:00",
-  "finished_at": "2026-05-20T00:11:13.071459+00:00",
-  "wall_clock_sec": 5944.454,
+  "started_at": "2026-05-19T22:32:28.794259+00:00",
+  "finished_at": "2026-05-20T00:10:07.516535+00:00",
+  "wall_clock_sec": 5858.722,
   "host": {
-    "hostname": "g023",
+    "hostname": "g003",
     "platform": "Linux-5.14.0-611.54.1.el9_7.x86_64-x86_64-with-glibc2.34",
-    "slurm_job_id": "119304",
-    "slurm_node": "g023",
+    "slurm_job_id": "119305",
+    "slurm_node": "g003",
     "cuda_visible_devices": "0"
   },
   "libs": {
@@ -45,19 +45,19 @@
   },
   "git_head": null,
   "inputs": {
-    "train_jsonl": "data/frozen/beads/sizes/full/train.jsonl",
-    "train_jsonl_sha256": "dc43cc19a568ba964d81e6751db20799371fc692f945d4fb87e18a69620c14c7",
-    "splits_manifest": "data/frozen/beads/splits_manifest.json",
-    "splits_manifest_sha256": "b7f5952b3b12fd0ab7a674008e850935c8634393e99bd662ce976ae5223145d4",
+    "train_jsonl": "data/frozen/wnc/full/train.jsonl",
+    "train_jsonl_sha256": "3f031a54a584b0c79f3c7aecd5f09d02ccc24806bf513db7748688af9418ddcf",
+    "splits_manifest": "data/frozen/wnc/splits_manifest.json",
+    "splits_manifest_sha256": "cdd6b20290dfc0e674aca33148c4f9cbbdc2024d679a4a35d2083a0eb664432a",
     "splits_label_map": {
       "0": "non-biased",
       "1": "biased"
     },
-    "train_dataset": "beads"
+    "train_dataset": "wnc"
   },
   "outputs": {
-    "adapter_path": "outputs/qlora_beads_full/adapter",
-    "train_metrics": "outputs/qlora_beads_full/train_metrics.json"
+    "adapter_path": "outputs/qlora_wnc_full/adapter",
+    "train_metrics": "outputs/qlora_wnc_full/train_metrics.json"
   },
   "model": {
     "model_name": "meta-llama/Llama-3.1-8B-Instruct",

@@ -1,0 +1,17 @@
+{
+  "run_name": "qlora_wnc_full__on__babe",
+  "eval_dataset": "babe",
+  "n_examples": 413,
+  "accuracy": 0.7602905569007264,
+  "precision_pos": 0.7314487632508834,
+  "recall_pos": 0.9,
+  "f1_pos": 0.8070175438596491,
+  "f1_macro": 0.7453618070735946,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.8231    0.5847    0.6837       183\n      biased     0.7314    0.9000    0.8070       230\n\n    accuracy                         0.7603       413\n   macro avg     0.7773    0.7423    0.7454       413\nweighted avg     0.7720    0.7603    0.7524       413\n",
+  "eval_seconds": 8.392,
+  "eval_forward_seconds": 8.109,
+  "eval_batch_size": 16,
+  "smoke_test": false,
+  "adapter_path": "/gpfs/projects/imt526a/group7/outputs/qlora_wnc_full/adapter",
+  "test_jsonl": "/gpfs/projects/imt526a/group7/data/frozen/babe/full/test.jsonl"
+}

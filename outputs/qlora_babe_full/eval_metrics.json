@@ -1,0 +1,17 @@
+{
+  "run_name": "qlora_babe_full",
+  "eval_dataset": "babe",
+  "n_examples": 413,
+  "accuracy": 0.8668280871670703,
+  "precision_pos": 0.869198312236287,
+  "recall_pos": 0.8956521739130435,
+  "f1_pos": 0.8822269807280514,
+  "f1_macro": 0.8645118190548335,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.8636    0.8306    0.8468       183\n      biased     0.8692    0.8957    0.8822       230\n\n    accuracy                         0.8668       413\n   macro avg     0.8664    0.8631    0.8645       413\nweighted avg     0.8667    0.8668    0.8665       413\n",
+  "eval_seconds": 7.989,
+  "eval_forward_seconds": 7.764,
+  "eval_batch_size": 16,
+  "smoke_test": false,
+  "adapter_path": "outputs/qlora_babe_full/adapter",
+  "test_jsonl": "data/frozen/babe/full/test.jsonl"
+}

@@ -1,0 +1,17 @@
+{
+  "run_name": "qlora_cajcodes_full__on__wnc",
+  "eval_dataset": "wnc",
+  "n_examples": 11041,
+  "accuracy": 0.5571959061679196,
+  "precision_pos": 0.5396605908233815,
+  "recall_pos": 0.7777173913043478,
+  "f1_pos": 0.6371799628942486,
+  "f1_macro": 0.5345769687830138,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.6024    0.3367    0.4320      5521\n      biased     0.5397    0.7777    0.6372      5520\n\n    accuracy                         0.5572     11041\n   macro avg     0.5710    0.5572    0.5346     11041\nweighted avg     0.5710    0.5572    0.5346     11041\n",
+  "eval_seconds": 190.92,
+  "eval_forward_seconds": 184.376,
+  "eval_batch_size": 16,
+  "smoke_test": false,
+  "adapter_path": "/gpfs/projects/imt526a/group7/outputs/qlora_cajcodes_full/adapter",
+  "test_jsonl": "/gpfs/projects/imt526a/group7/data/frozen/wnc/full/test.jsonl"
+}
