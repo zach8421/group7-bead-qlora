@@ -65,6 +65,13 @@ logs/*
 # on hard kill).
 outputs/manifest.csv.lock
 
+# Hand-labeling task — work-in-progress per-labeler CSVs and the private
+# _mapping.csv that joins back to BEADs row_idx + gold + non_beads_vote.
+# Regenerable from scripts/make_labeling_csvs.py at the same --seed.
+# (When labels come back, completed labeler_<name>_labeled.csv files can
+# be committed individually if you want a permanent record.)
+labeling/
+
 # ---- Cruft ----
 *.zip
 terminal output*.txt
