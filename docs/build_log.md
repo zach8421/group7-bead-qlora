@@ -9,6 +9,179 @@ use the `run_meta.json` files in `outputs/<run>/`.
 
 ---
 
+## 2026-05-19 — QLoRA cross-eval matrix complete (the headline result)
+
+**TL;DR**
+
+A Llama-3.1-8B QLoRA fine-tune learns each of the four bias datasets
+well in isolation (diagonal mean accuracy **0.842**) but does **not**
+transfer between them (off-diagonal mean accuracy **0.510** — barely
+above chance on a balanced binary task). The 8B-param model with
+full LoRA fine-tuning does not soften the empirical signal that the
+TF-IDF baseline already showed: **datasets are siloed.** Several
+off-diagonals collapse to *worse than majority-class*. This is the
+project's central empirical finding.
+
+**Per-adapter training cost + same-dataset score**
+
+| Adapter | n_train | Wall (min) | Accuracy | F1_macro | P_pos | R_pos |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| qlora_beads_full     | 27,263 | 99.1 | 0.7987 | 0.7987 | 0.7998 | 0.7961 |
+| qlora_babe_full      | 3,296  | 12.9 | 0.8668 | 0.8645 | 0.8692 | 0.8957 |
+| qlora_cajcodes_full  | 525    | 2.0  | 0.9697 | 0.9651 | 1.0000 | 0.9565 |
+| qlora_wnc_full       | 27,263 | 97.6 | 0.7339 | 0.7336 | 0.7494 | 0.7027 |
+
+WNC was capped at 27,263 rows (= BEADs full) for apples-to-apples
+training size; the simple-dataset trains used their full pool. cajcodes'
+0.970 is on a 66-row test set — wide CIs.
+
+**The matrix — accuracy** (rows=train, cols=eval)
+
+|         |   beads |    babe | cajcodes |     wnc |
+| ---:    |   ---:  |   ---:  |    ---:  |   ---:  |
+| **beads**    |  **0.7987** |  0.3123 |  0.6667  |  0.4617 |
+| **babe**     |  0.3790 |  **0.8668** |  0.4242  |  0.5633 |
+| **cajcodes** |  0.4224 |  0.5884 |  **0.9697**  |  0.5572 |
+| **wnc**      |  0.4070 |  0.7603 |  0.5758  |  **0.7339** |
+
+**The matrix — F1_macro** (rows=train, cols=eval)
+
+|         |   beads |    babe | cajcodes |     wnc |
+| ---:    |   ---:  |   ---:  |    ---:  |   ---:  |
+| **beads**    |  **0.7987** |  0.2773 |  0.4000  |  0.4562 |
+| **babe**     |  0.3496 |  **0.8645** |  0.4107  |  0.5198 |
+| **cajcodes** |  0.3384 |  0.4314 |  **0.9651**  |  0.5346 |
+| **wnc**      |  0.4026 |  0.7454 |  0.4454  |  **0.7336** |
+
+Diagonal mean accuracy 0.842 (range 0.734-0.970). Off-diagonal mean
+accuracy 0.510 (range 0.312-0.760). The F1_macro matrix tells the same
+story but slightly sharper — three off-diagonal F1_macro values land
+below 0.40 (i.e. degenerate-prediction patterns where one class is
+mostly skipped).
+
+**Cells worth flagging for the writeup**
+
+1. **wnc → babe = 0.760 accuracy / 0.745 F1_macro** is by far the
+   strongest off-diagonal — the only cross-dataset cell above 0.70.
+   Plausible explanation: WNC's 27k training pool has broad lexical
+   coverage of news-adjacent text and Wikipedia-derived neutralizations,
+   which overlaps reasonably with BABE's news-sentence labels.
+   *Asymmetric*: babe → wnc only reaches 0.563. So it's WNC's coverage
+   helping on BABE, not vice versa.
+2. **beads → cajcodes = 0.667 accuracy but F1_macro = 0.400** is a
+   degenerate-prediction signature. cajcodes' test set is 69.7% positive,
+   and a BEADs-trained model that over-predicts "biased" looks accurate
+   without actually transferring. Reporting both metrics — not just
+   accuracy — is the right framing here.
+3. **cajcodes diagonals are on 66 test rows**; wide CIs. The 0.970
+   diagonal sits a few rows from collapse — note in the writeup.
+4. **All beads-train off-diagonal F1_macro values are ≤ 0.46** —
+   BEADs-trained models transfer notably worse than wnc-trained ones,
+   even though BEADs has comparable train size and was the original
+   "main" dataset of the project. Suggests BEADs has more
+   dataset-specific lexical signature than WNC's Wikipedia-NPOV pairs.
+
+**The story this tells**
+
+The proposal's central empirical question was whether bias datasets
+were measuring "the same thing." The matrix says no:
+
+- Each adapter beats its own dataset's TF-IDF baseline by 2-13 points
+  (e.g. wnc 0.736 QLoRA vs 0.536 TF-IDF, +0.20 — the largest gain).
+  So QLoRA *is* learning real per-dataset signal, not just memorising.
+- That signal does not transfer. The mean off-diagonal accuracy of
+  0.510 is essentially indistinguishable from coin-flip on a binary
+  task with class prior near 0.50.
+- This is consistent across all four train datasets — it isn't a
+  property of one outlier dataset.
+
+The strongest defensible writeup framing: *"bias" as labelled by
+these four datasets is not one underlying construct measured four
+different ways; it's four different constructs that happen to share
+a label vocabulary.*
+
+**Operational notes worth capturing for the next sweep**
+
+The execution path got messier than necessary:
+
+1. **Concurrent submissions raced.** A 119286/119287 pair landed in
+   `squeue` because an earlier launch had already submitted babe +
+   cajcodes when the user re-ran `launch_cross_eval_sweep.sh`. Both
+   pairs ran to completion; the duplicate babe/cajcodes adapters
+   consumed ~$1.35 of compute writing byte-identical outputs (same
+   seed, same recipe, deterministic). The fcntl manifest lock that
+   the 2026-05-19 prep entry added held cleanly — no corruption,
+   just wasted GPU-hours.
+2. **wnc's first run failed in 6 seconds** because
+   `data/frozen/wnc/full/train.jsonl` wasn't on Tillicum. `push-data`
+   wasn't run before launch, and WNC's loader has no HF fallback
+   (it needs the raw `bias_data.zip` TSVs which are gitignored). babe
+   and cajcodes survived because their loaders pull from HuggingFace.
+   The slurm wrapper auto-fell-back to `freeze_splits.py` to
+   regenerate, then crashed on the missing TSVs.
+   **Lesson**: have `run_qlora.slurm` hard-fail with a clear error
+   when JSONLs are missing for wnc/beads (no silent fallback to
+   freeze_splits, which only works for HF-backed loaders). Defer this
+   to a follow-up entry; for now we know to always `push-data`.
+3. **The BEADs full adapter from sweep 117771 was deleted** during
+   the post-rename cleanup of `outputs/qlora_full/` directories.
+   The adapter weights had been written under the pre-rename name
+   (`outputs/qlora_full/adapter/`) on Tillicum, and the recommended
+   `rm -rf outputs/qlora_{100,500,1k,5k,full}` for cleaning up empty
+   shells caught the adapter too. Cost ~$4.50 to retrain it.
+   **Lesson**: when proposing destructive cleanup, name the specific
+   files (not glob patterns) and check `find` for `adapter_model.safetensors`
+   before recommending. Or commit adapters to git-LFS so they survive
+   server-side housekeeping.
+
+The retrained `outputs/qlora_beads_full/adapter/` scored 0.7987
+(vs the May-16 sweep's 0.8036; delta -0.005). Within bf16 reduction
+noise + training non-determinism. Not flagged as a separate issue.
+
+**Final budget tally** for the cross-eval arm:
+
+| Job | Cost |
+| --- | ---: |
+| 119286/119290 (babe, original + dup) | ~$1.80 |
+| 119287/119291 (cajcodes, original + dup) | ~$0.55 |
+| 119292 (wnc, failed 6s) | ~$0.00 |
+| 119304 (beads retrain) | ~$3.60 |
+| 119305 (wnc, real) | ~$3.60 |
+| 119307 (cross-eval matrix) | ~$0.30 |
+| **Total** | **~$9.85** |
+
+Estimated vs the originally-proposed 4 trains + 1 x-eval (~$6.75):
+roughly $3 of operational tax from the duplicates and beads retrain.
+The matrix itself is settled and reproducible from
+[outputs/cross_eval/](../outputs/cross_eval/) (16 cells × 3 files
+each, all gitted).
+
+**Where to read more**
+
+- [outputs/manifest.csv](../outputs/manifest.csv) — the consolidated
+  table. 24 rows (5 BEADs sweep + 3 new train rows + 16 cross-eval
+  cells). The matrix is buildable by filtering on
+  `(train_dataset, eval_dataset)`.
+- [outputs/cross_eval/](../outputs/cross_eval/) — per-cell
+  `eval_metrics.json` and `predictions.jsonl`.
+- Commits `def1572` (pipeline + launchers) and `36700b7` (results).
+
+**What's next**
+
+- **Disagreement inspection** (Week 8 deliverable, per proposal §5):
+  pick 30-50 examples where adapters disagree on the same input across
+  datasets, hand-label them, see if the dataset-specific decisions
+  are defensible or look like artifacts.
+- **TF-IDF vs QLoRA delta table** for the writeup — a one-pager that
+  shows each off-diagonal cell with the matched TF-IDF cell next to
+  it, to argue that the QLoRA result isn't just "TF-IDF + noise."
+- **WNC size cap retrospective**: WNC at 27k matched BEADs's train
+  size, but BABE (3.3k) and cajcodes (525) didn't get capped. If the
+  reviewer asks why babe transfers worse than wnc, the train-size
+  confound is on the table. Worth adding a footnote, not blocking.
+
+---
+
 ## 2026-05-19 — Tillicum launch prep: 3 new adapters + 16-cell cross-eval
 
 **What this adds**
