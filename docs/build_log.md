@@ -101,47 +101,74 @@ datasets share a *different notion of bias* than BEADs (a
 construct-validity issue, not a noise issue). The hand-labeling step
 distinguishes those.
 
-**The planned experiment**
+**The planned experiment (numbers locked 2026-05-19)**
 
-Pre-registered before any cleaning is computed on the BEADs train pool:
+Pre-registered before any cleaning is computed on the BEADs train pool.
+"Slightly aggressive" choices across the parameters — strong enough to
+test whether the cleaning method actually does anything, conservative
+enough that a positive result wouldn't be explained away by lax
+thresholds.
 
-1. **Sample**: 500 random rows from BEADs test, stratified 250/250 by gold
-   label (because the noise is asymmetric — uniform sampling would
-   under-represent the noisier `non-biased` rows).
+1. **Sample**: **500 random rows** from BEADs test, **stratified
+   250/250 by gold label** (uniform sampling would under-represent the
+   noisier `non-biased` rows given the 5:1 missed-bias asymmetry).
 2. **Hand-label** with a team of 3:
-   - Each labeler gets 200 rows (150 unique + 50 shared block for IAA).
+   - Each labeler gets **200 rows (150 unique + 50 shared IAA block)**.
    - The 50 IAA rows are randomly interleaved with each labeler's
      unique 150 so they don't know which rows are shared.
    - Blind: no gold label, no model predictions shown during labeling.
    - Written protocol with edge-case rules agreed *before* labeling
      begins (mitigates the obvious IAA-suppression failure mode).
-3. **IAA gate**: pairwise agreement on the 50 shared rows ≥ 75%, or
-   stop and recalibrate.
+3. **IAA gate**: pairwise agreement on the 50 shared rows **≥ 70%**, or
+   stop and recalibrate the labeling protocol.
 4. **Three measurements against the consensus hand-labels**:
    - BEADs gold mislabel rate (the headline statistic)
    - `qlora_beads_full` true accuracy (vs the 0.7987 against noisy gold)
    - Cross-dataset ensemble flip-correctness on flagged rows
      (validates whether the ensemble's *which-label* judgment is
      reliable enough to use for re-labeling, not just removal)
-5. **Pre-registered cleaning flag** (decided before computing on train):
-   conservative rule — `cross_unanimous_disagree == 1 AND
-   beads_self_disagrees_with_gold == 1`. The flag is structural; the
-   *action* (remove vs flip) is conditional on step (4)'s flip-correctness:
-   - ≥ 75%: both remove and flip retrains run (three-way comparison)
-   - 60-75%: only remove
-   - < 60%: skip the retrain step; the noise-detection result stands alone
-6. **Retrain** the `qlora_{100, 500, 1k, 5k, full}` sweep on cleaned
-   train, then evaluate the new sweep against the 500 hand-labeled rows
-   (not against the noisy BEADs test — that would be moving the
-   goalposts).
-7. **Success criterion** (pre-registered): cleaned-data `qlora_full`
-   accuracy on the 500 hand-labels exceeds original-data `qlora_full`
-   accuracy by **≥ 2× the IAA disagreement rate**. So if IAA agreement
-   is 90% (disagreement rate 10%), the lift has to be ≥ 20 percentage
-   points to count. Intentionally strict — claims of model improvement
-   should exceed the noise floor of the ground truth itself, and the
-   2× multiplier gives a margin for finite-sample noise on a 500-row
-   evaluation.
+5. **Pre-registered cleaning flag**: `cross_unanimous_disagree == 1` —
+   a row is flagged whenever all three non-BEADs adapters (BABE,
+   cajcodes, WNC) agree with each other against BEADs gold. The BEADs
+   adapter's vote is *not* required (it trained on the gold so its
+   agreement is partly tautological).
+   - **Measured on test**: 2,585 of 6,816 rows = 37.9% flagged.
+   - **Expected on train** (extrapolation, not measurement):
+     ~10,340 of 27,263 rows. The actual count becomes known when the
+     4 adapters are run on the train pool (open decision item below).
+   The extrapolation assumes BEADs train and test have similar
+   underlying noise (true under the stratified split that produced
+   them) and that the non-BEADs adapters predict similarly on both
+   (they never saw either split, so this is also fair).
+
+   The cleaning *action* (remove vs flip) is conditional on step (4)'s
+   flip-correctness:
+   - **≥ 70%**: both remove and flip retrains run (three-way comparison)
+   - **55-70%**: only remove (flip is too unreliable to trust the relabel)
+   - **< 55%**: skip the retrain step; the noise-detection result stands alone
+6. **Retrain** the full `qlora_{100, 500, 1k, 5k, full}` sweep on
+   cleaned train (not just `qlora_full`, because the learning-curve
+   shape answers whether cleaning matters more at low or high data —
+   probably the more interesting finding). Evaluate the new sweep
+   against the 500 hand-labeled rows, not against the noisy BEADs test
+   (the latter would be moving the goalposts).
+7. **Success criterion**: cleaned-data `qlora_full` accuracy on the 500
+   hand-labels exceeds original-data `qlora_full` accuracy by
+   **≥ 1.5 × the IAA disagreement rate**. Concrete thresholds at
+   plausible IAA values:
+
+   | IAA agreement | Disagreement rate | Lift threshold for success |
+   | ---: | ---: | ---: |
+   | 95% | 5% | ≥ 7.5 pp |
+   | 90% | 10% | ≥ 15 pp |
+   | 85% | 15% | ≥ 22.5 pp |
+   | 80% | 20% | ≥ 30 pp |
+   | 70% (gate floor) | 30% | ≥ 45 pp |
+
+   The 1.5× multiplier requires the lift to exceed the ground-truth
+   noise floor with a margin for finite-sample noise on a 500-row
+   evaluation. Strict but not pathological — at decent IAA (≥85%) it's
+   asking for a clearly visible improvement, not a marginal one.
 
 What this experiment can produce:
 
@@ -153,20 +180,23 @@ What this experiment can produce:
 
 **Decisions still open**
 
-- Whether to extend predictions to BEADs train + val (42,599 rows total
-  vs the 6,816 test rows the audit currently covers). Required for the
-  cleaning step but not for hand-labeling. Estimated ~$2-3 in Tillicum
-  compute, ~30-45 min wall. Can be submitted while hand-labeling
-  happens in parallel.
-- Whether to run the full `qlora_{100, 500, 1k, 5k, full}` sweep on
-  cleaned data (~$10) or just `qlora_full` (~$3.60). The full sweep
-  shows whether cleaning matters more at low vs high data, which is
-  probably the more interesting finding.
-- The pre-registered cleaning rule's "AND beads_self_disagrees" clause
-  is the conservative version (~8% of train flagged). The aggressive
-  alternative is just `cross_unanimous_disagree == 1` (~38% of train).
-  Conservative is the default; if hand-labels suggest BEADs's noise
-  rate is very high, switching to aggressive may be justified.
+- Predictions on BEADs train + val (the audit currently covers only
+  the 6,816 test rows). Required to flag the 27,263 train rows for
+  cleaning. Estimated ~$2-3 in Tillicum compute, ~30-45 min wall. Can
+  be submitted while hand-labeling happens in parallel — these are
+  independent paths.
+
+**Budget at-pinned-numbers**
+
+| Item | Cost |
+| --- | ---: |
+| Predict 4 adapters on BEADs train + val | ~$2 |
+| Full sweep retrain on "removed" cleaned data | ~$10 |
+| Full sweep retrain on "flipped" cleaned data (only if flip-correctness gate passes) | ~$10 |
+| **Total if both retrains** | **~$22** |
+| **Total if only remove retrain** | **~$12** |
+
+Plus ~6 hours of team labeling time (3 people × 2 hrs).
 
 **Where the artifacts live**
 
