@@ -44,15 +44,17 @@ MAX_TRAIN_ROWS="${MAX_TRAIN_ROWS:-0}"  # 0 = full train.jsonl; >0 = cap (e.g. wn
 
 case "$DATASET" in
   beads|babe|cajcodes|wnc) ;;
-  *) echo "Unknown DATASET='$DATASET'. Use beads|babe|cajcodes|wnc." >&2; exit 2 ;;
+  beads_cleaned_remove|beads_cleaned_remove_balanced|beads_cleaned_flip|beads_cleaned_flip_balanced) ;;
+  *) echo "Unknown DATASET='$DATASET'. Use beads|babe|cajcodes|wnc or beads_cleaned_{remove,remove_balanced,flip,flip_balanced}." >&2; exit 2 ;;
 esac
 
 # Layout convention:
-#   beads has multiple sizes; the other three only have 'full'.
-if [[ "$DATASET" == "beads" ]]; then
+#   beads + cleaned variants have multiple sizes (nested); the simple
+#   datasets (babe/cajcodes/wnc) only have 'full'.
+if [[ "$DATASET" == "beads" || "$DATASET" == beads_cleaned_* ]]; then
   case "$SIZE" in
     100|500|1k|5k|full) ;;
-    *) echo "Unknown SIZE='$SIZE' for beads. Use 100|500|1k|5k|full." >&2; exit 2 ;;
+    *) echo "Unknown SIZE='$SIZE' for $DATASET. Use 100|500|1k|5k|full." >&2; exit 2 ;;
   esac
   SIZE_DIR="sizes/${SIZE}"
 else
@@ -71,7 +73,7 @@ COMMITTED_MANIFEST="${FROZEN_ROOT}/splits_manifest.json"
 # small subsets since each is well under an hour. Saving every 800 steps gives
 # roughly one checkpoint per ~30 min on the H200, so a node failure costs at
 # most ~30 min of compute.
-if [[ "$SIZE" == "full" && ("$DATASET" == "beads" || "$DATASET" == "wnc") ]]; then
+if [[ "$SIZE" == "full" && ("$DATASET" == "beads" || "$DATASET" == "wnc" || "$DATASET" == beads_cleaned_*) ]]; then
   SAVE_STEPS="${SAVE_STEPS:-800}"
   SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-2}"
 else
