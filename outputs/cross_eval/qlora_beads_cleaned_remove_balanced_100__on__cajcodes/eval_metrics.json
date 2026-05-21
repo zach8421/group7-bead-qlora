@@ -1,0 +1,17 @@
+{
+  "run_name": "qlora_beads_cleaned_remove_balanced_100__on__cajcodes",
+  "eval_dataset": "cajcodes",
+  "n_examples": 66,
+  "accuracy": 0.7272727272727273,
+  "precision_pos": 1.0,
+  "recall_pos": 0.6086956521739131,
+  "f1_pos": 0.7567567567567568,
+  "f1_macro": 0.723205964585275,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.5263    1.0000    0.6897        20\n      biased     1.0000    0.6087    0.7568        46\n\n    accuracy                         0.7273        66\n   macro avg     0.7632    0.8043    0.7232        66\nweighted avg     0.8565    0.7273    0.7364        66\n",
+  "eval_seconds": 1.216,
+  "eval_forward_seconds": 1.174,
+  "eval_batch_size": 16,
+  "smoke_test": false,
+  "adapter_path": "/gpfs/projects/imt526a/group7/outputs/qlora_beads_cleaned_remove_balanced_100/adapter",
+  "test_jsonl": "/gpfs/projects/imt526a/group7/data/frozen/cajcodes/full/test.jsonl"
+}

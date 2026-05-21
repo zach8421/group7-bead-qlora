@@ -1,0 +1,67 @@
+{
+  "run_name": "qlora_beads_cleaned_flip_500__on__wnc",
+  "smoke_test": false,
+  "args": {
+    "train_jsonl": "data/frozen/beads_cleaned_flip/sizes/500/train.jsonl",
+    "output_dir": "outputs/qlora_beads_cleaned_flip_500",
+    "run_name": "qlora_beads_cleaned_flip_500",
+    "splits_manifest": "data/frozen/beads_cleaned_flip/splits_manifest.json",
+    "train_dataset": "beads_cleaned_flip",
+    "model_name": "meta-llama/Llama-3.1-8B-Instruct",
+    "smoke_model_name": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+    "max_seq_length": 512,
+    "per_device_batch_size": 4,
+    "grad_accum": 4,
+    "learning_rate": 0.0002,
+    "num_epochs": 3.0,
+    "logging_steps": 10,
+    "save_steps": 0,
+    "save_total_limit": 2,
+    "seed": 42,
+    "smoke_test": false,
+    "max_train_rows": 0
+  },
+  "started_at": "2026-05-21T01:32:17.106742+00:00",
+  "finished_at": "2026-05-21T01:34:25.558135+00:00",
+  "wall_clock_sec": 128.451,
+  "host": {
+    "hostname": "g023",
+    "platform": "Linux-5.14.0-611.54.1.el9_7.x86_64-x86_64-with-glibc2.34",
+    "slurm_job_id": "119851",
+    "slurm_node": "g023",
+    "cuda_visible_devices": "0"
+  },
+  "libs": {
+    "python": "3.12.13",
+    "torch": "2.11.0+cu130",
+    "transformers": "5.5.3",
+    "peft": "0.19.1",
+    "trl": "1.3.0",
+    "bitsandbytes": "0.49.2",
+    "datasets": "4.8.4",
+    "accelerate": "1.13.0",
+    "cuda": "13.0",
+    "gpu": "NVIDIA H200"
+  },
+  "git_head": null,
+  "inputs": {
+    "train_jsonl": "data/frozen/beads_cleaned_flip/sizes/500/train.jsonl",
+    "train_jsonl_sha256": "23d3eb5a696e18cc40d7783aa7f00c98769c27f3a7b2a1e2a7005bff465cd7da",
+    "splits_manifest": "data/frozen/beads_cleaned_flip/splits_manifest.json",
+    "splits_manifest_sha256": "b524ac9630bb909faf0bbfbf7cb0c18e68b728ea91cec3e2c0dc2bfec78b64b1",
+    "splits_label_map": {
+      "0": "non-biased",
+      "1": "biased"
+    },
+    "train_dataset": "beads_cleaned_flip"
+  },
+  "outputs": {
+    "adapter_path": "outputs/qlora_beads_cleaned_flip_500/adapter",
+    "train_metrics": "outputs/qlora_beads_cleaned_flip_500/train_metrics.json"
+  },
+  "model": {
+    "model_name": "meta-llama/Llama-3.1-8B-Instruct",
+    "trainable_params": 41943040,
+    "total_params": 4582543360
+  }
+}

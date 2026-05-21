@@ -1,0 +1,17 @@
+{
+  "run_name": "qlora_beads_cleaned_flip_500__on__wnc",
+  "eval_dataset": "wnc",
+  "n_examples": 11041,
+  "accuracy": 0.4998641427406938,
+  "precision_pos": 0.49990940387751404,
+  "recall_pos": 0.9996376811594203,
+  "f1_pos": 0.6665056166203648,
+  "f1_macro": 0.3334338365505879,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.3333    0.0002    0.0004      5521\n      biased     0.4999    0.9996    0.6665      5520\n\n    accuracy                         0.4999     11041\n   macro avg     0.4166    0.4999    0.3334     11041\nweighted avg     0.4166    0.4999    0.3334     11041\n",
+  "eval_seconds": 190.347,
+  "eval_forward_seconds": 184.841,
+  "eval_batch_size": 16,
+  "smoke_test": false,
+  "adapter_path": "/gpfs/projects/imt526a/group7/outputs/qlora_beads_cleaned_flip_500/adapter",
+  "test_jsonl": "/gpfs/projects/imt526a/group7/data/frozen/wnc/full/test.jsonl"
+}

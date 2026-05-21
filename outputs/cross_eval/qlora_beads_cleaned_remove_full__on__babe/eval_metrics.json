@@ -1,0 +1,17 @@
+{
+  "run_name": "qlora_beads_cleaned_remove_full__on__babe",
+  "eval_dataset": "babe",
+  "n_examples": 413,
+  "accuracy": 0.5472154963680388,
+  "precision_pos": 0.5914893617021276,
+  "recall_pos": 0.6043478260869565,
+  "f1_pos": 0.5978494623655914,
+  "f1_macro": 0.5399219610996933,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.4888    0.4754    0.4820       183\n      biased     0.5915    0.6043    0.5978       230\n\n    accuracy                         0.5472       413\n   macro avg     0.5401    0.5399    0.5399       413\nweighted avg     0.5460    0.5472    0.5465       413\n",
+  "eval_seconds": 7.938,
+  "eval_forward_seconds": 7.706,
+  "eval_batch_size": 16,
+  "smoke_test": false,
+  "adapter_path": "/gpfs/projects/imt526a/group7/outputs/qlora_beads_cleaned_remove_full/adapter",
+  "test_jsonl": "/gpfs/projects/imt526a/group7/data/frozen/babe/full/test.jsonl"
+}

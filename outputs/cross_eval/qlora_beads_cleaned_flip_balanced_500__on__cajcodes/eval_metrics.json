@@ -1,0 +1,17 @@
+{
+  "run_name": "qlora_beads_cleaned_flip_balanced_500__on__cajcodes",
+  "eval_dataset": "cajcodes",
+  "n_examples": 66,
+  "accuracy": 0.6212121212121212,
+  "precision_pos": 0.8888888888888888,
+  "recall_pos": 0.5217391304347826,
+  "f1_pos": 0.6575342465753424,
+  "f1_macro": 0.6169027165080102,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.4359    0.8500    0.5763        20\n      biased     0.8889    0.5217    0.6575        46\n\n    accuracy                         0.6212        66\n   macro avg     0.6624    0.6859    0.6169        66\nweighted avg     0.7516    0.6212    0.6329        66\n",
+  "eval_seconds": 1.23,
+  "eval_forward_seconds": 1.188,
+  "eval_batch_size": 16,
+  "smoke_test": false,
+  "adapter_path": "/gpfs/projects/imt526a/group7/outputs/qlora_beads_cleaned_flip_balanced_500/adapter",
+  "test_jsonl": "/gpfs/projects/imt526a/group7/data/frozen/cajcodes/full/test.jsonl"
+}
