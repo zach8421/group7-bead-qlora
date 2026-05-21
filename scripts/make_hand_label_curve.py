@@ -143,7 +143,7 @@ def plot(points_by_family: dict[str, list[tuple[int, float]]],
     if not points_by_family:
         raise SystemExit("[plot] no points found in hand_label_eval.csv")
 
-    fig, ax = plt.subplots(figsize=(9.5, 6), dpi=150)
+    fig, ax = plt.subplots(figsize=(10, 7), dpi=150)
 
     # Plot each family in declared order.
     for family, label, color, ls, marker in FAMILY_STYLE:
@@ -188,7 +188,9 @@ def plot(points_by_family: dict[str, list[tuple[int, float]]],
     )
     ax.grid(True, axis="y", linestyle=":", alpha=0.4, zorder=1)
     ax.set_axisbelow(True)
-    ax.legend(loc="upper left", fontsize=9, framealpha=0.95, ncol=1)
+    # Legend below the plot in 3 columns — keeps the data area unobstructed.
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13),
+              ncol=3, fontsize=9, framealpha=0.95)
 
     # Y-limits: 0 to a bit above max for breathing room.
     all_ys = [y for pts in points_by_family.values() for _, y in pts]
@@ -198,7 +200,7 @@ def plot(points_by_family: dict[str, list[tuple[int, float]]],
 
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path)
+    fig.savefig(out_path, bbox_inches="tight")
     print(f"[plot] wrote {out_path}  ({out_path.stat().st_size / 1024:.1f} KB)")
 
 
