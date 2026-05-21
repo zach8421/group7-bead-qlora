@@ -9,6 +9,34 @@ use the `run_meta.json` files in `outputs/<run>/`.
 
 ---
 
+## 2026-05-21 — Project summary document for team + prof
+
+**What**
+
+[docs/project_summary.md](project_summary.md) — a single share-ready
+summary of the full project arc. Six phases, each with What / Why /
+Results blocks. Tight prose (no first or second person), all headline
+numbers in tables, ~5-10 min read. Intended audience: teammates and
+the instructor.
+
+Phases summarised:
+
+1. Original BEADs learning curve (0.804 against noisy gold)
+2. 4x4 cross-eval matrix (datasets appear siloed)
+3. Hand-labeling (~70% BEADs label noise)
+4. Cleaning + retrain Round 1 (+48.6 pp to 0.768 against truth)
+5. Cross-dataset transfer of cleaned models (BABE +49.6 pp)
+6. Round 2 cleaning (stability gained, peak not exceeded)
+
+Plus an "Overall outcome" section with 5 defensible claims, compute
+cost ($26), and a reproducibility note.
+
+Source material for the document is the per-phase entries below in
+this build log; the summary distills them but doesn't add any new
+findings.
+
+---
+
 ## 2026-05-21 — Round-2 cleaning: monotonicity gained, peak not exceeded
 
 **TL;DR**
