@@ -55,6 +55,10 @@ FAMILY_FULL_SIZE = {
     "remove_balanced": 10404,
     "flip": 27263,
     "flip_balanced": 14246,
+    # Round-2 (2026-05-21): cleaned with the round-1 winner added as a
+    # 4th voter. Both are flip + balanced.
+    "v2_strict": 16424,
+    "v2_majority": 16008,
 }
 
 # Nominal sweep sizes, mapped to actual row counts.
@@ -64,11 +68,15 @@ SIZE_TO_INT = {"100": 100, "500": 500, "1k": 1000, "5k": 5000}
 # Display name + matplotlib style per family.
 # Order in this list determines z-order (later = on top).
 FAMILY_STYLE = [
-    ("original",         "Original (noisy gold)",       "#404040", "-",  "o"),
-    ("remove",           "Cleaned: remove",             "#1f77b4", "-",  "o"),
-    ("remove_balanced",  "Cleaned: remove + balanced",  "#1f77b4", "--", "s"),
-    ("flip",             "Cleaned: flip",               "#d62728", "-",  "o"),
-    ("flip_balanced",    "Cleaned: flip + balanced",    "#d62728", "--", "s"),
+    ("original",         "Original (noisy gold)",          "#404040", "-",  "o"),
+    ("remove",           "Cleaned: remove",                "#1f77b4", "-",  "o"),
+    ("remove_balanced",  "Cleaned: remove + balanced",     "#1f77b4", "--", "s"),
+    ("flip",             "Cleaned: flip",                  "#d62728", "-",  "o"),
+    ("flip_balanced",    "Cleaned: flip + balanced",       "#d62728", "--", "s"),
+    # Round 2: 4-voter rule (adds the round-1 winner as 4th voter).
+    # Green so the new variants stand out from the blue/red of round 1.
+    ("v2_strict",        "Round 2: 4-voter strict",        "#2ca02c", "-",  "^"),
+    ("v2_majority",      "Round 2: 4-voter majority",      "#9467bd", "-",  "D"),
 ]
 
 
