@@ -45,7 +45,8 @@ MAX_TRAIN_ROWS="${MAX_TRAIN_ROWS:-0}"  # 0 = full train.jsonl; >0 = cap (e.g. wn
 case "$DATASET" in
   beads|babe|cajcodes|wnc) ;;
   beads_cleaned_remove|beads_cleaned_remove_balanced|beads_cleaned_flip|beads_cleaned_flip_balanced) ;;
-  *) echo "Unknown DATASET='$DATASET'. Use beads|babe|cajcodes|wnc or beads_cleaned_{remove,remove_balanced,flip,flip_balanced}." >&2; exit 2 ;;
+  beads_cleaned_v2_strict|beads_cleaned_v2_majority) ;;
+  *) echo "Unknown DATASET='$DATASET'. Use beads|babe|cajcodes|wnc or beads_cleaned_{remove,remove_balanced,flip,flip_balanced,v2_strict,v2_majority}." >&2; exit 2 ;;
 esac
 
 # Layout convention:
