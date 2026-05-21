@@ -1,0 +1,144 @@
+{
+  "schema_version": 2,
+  "dataset": "beads_cleaned_v2_strict",
+  "seed": 42,
+  "source": "round2_cleaning_rule=4_voter_unanimous;action=flip;then_balance",
+  "label_map": {
+    "0": "non-biased",
+    "1": "biased"
+  },
+  "split_strategy": "round2_4voter_clean_then_undersample_then_nested_stratified",
+  "nesting": "train_100 ⊂ train_500 ⊂ train_1k ⊂ train_5k ⊂ train_full",
+  "sizes": {
+    "full": {
+      "train": {
+        "path": "sizes/full/train.jsonl",
+        "sha256": "253bddd6be18438ab7bef3bb4d098bfc0c0a8a8970931ac479f104fd4a6adb78",
+        "n": 16424,
+        "label_0": 8212,
+        "label_1": 8212,
+        "pct_label_1": 0.5
+      },
+      "val": {
+        "path": "sizes/full/val.jsonl",
+        "sha256": "92a9b6ff684ec16c46966a09e82e213cc68ef7dcb48ddf6c4167676095e36db3",
+        "n": 8520,
+        "label_0": 4266,
+        "label_1": 4254,
+        "pct_label_1": 0.4993
+      },
+      "test": {
+        "path": "sizes/full/test.jsonl",
+        "sha256": "8d3907dcf66a711d92ddc83a8f5ac4a948b91edacbafd40310299b5c0c77fd3d",
+        "n": 6816,
+        "label_0": 3413,
+        "label_1": 3403,
+        "pct_label_1": 0.4993
+      }
+    },
+    "5k": {
+      "train": {
+        "path": "sizes/5k/train.jsonl",
+        "sha256": "f3e73839b22ff0731ac31f7786478118da514b99e82396e39e316e73146d97a6",
+        "n": 5000,
+        "label_0": 2500,
+        "label_1": 2500,
+        "pct_label_1": 0.5
+      },
+      "val": {
+        "path": "sizes/5k/val.jsonl",
+        "sha256": "92a9b6ff684ec16c46966a09e82e213cc68ef7dcb48ddf6c4167676095e36db3",
+        "n": 8520,
+        "label_0": 4266,
+        "label_1": 4254,
+        "pct_label_1": 0.4993
+      },
+      "test": {
+        "path": "sizes/5k/test.jsonl",
+        "sha256": "8d3907dcf66a711d92ddc83a8f5ac4a948b91edacbafd40310299b5c0c77fd3d",
+        "n": 6816,
+        "label_0": 3413,
+        "label_1": 3403,
+        "pct_label_1": 0.4993
+      }
+    },
+    "1k": {
+      "train": {
+        "path": "sizes/1k/train.jsonl",
+        "sha256": "2c3af1d3b877c6bbcbc20a17f5093e034fa6cd50cac284f19381889a37e870c2",
+        "n": 1000,
+        "label_0": 500,
+        "label_1": 500,
+        "pct_label_1": 0.5
+      },
+      "val": {
+        "path": "sizes/1k/val.jsonl",
+        "sha256": "92a9b6ff684ec16c46966a09e82e213cc68ef7dcb48ddf6c4167676095e36db3",
+        "n": 8520,
+        "label_0": 4266,
+        "label_1": 4254,
+        "pct_label_1": 0.4993
+      },
+      "test": {
+        "path": "sizes/1k/test.jsonl",
+        "sha256": "8d3907dcf66a711d92ddc83a8f5ac4a948b91edacbafd40310299b5c0c77fd3d",
+        "n": 6816,
+        "label_0": 3413,
+        "label_1": 3403,
+        "pct_label_1": 0.4993
+      }
+    },
+    "500": {
+      "train": {
+        "path": "sizes/500/train.jsonl",
+        "sha256": "cd3141629e1a18f55e005b7cb2bfc73921435ca4adfcbfe94abfca678012b555",
+        "n": 500,
+        "label_0": 250,
+        "label_1": 250,
+        "pct_label_1": 0.5
+      },
+      "val": {
+        "path": "sizes/500/val.jsonl",
+        "sha256": "92a9b6ff684ec16c46966a09e82e213cc68ef7dcb48ddf6c4167676095e36db3",
+        "n": 8520,
+        "label_0": 4266,
+        "label_1": 4254,
+        "pct_label_1": 0.4993
+      },
+      "test": {
+        "path": "sizes/500/test.jsonl",
+        "sha256": "8d3907dcf66a711d92ddc83a8f5ac4a948b91edacbafd40310299b5c0c77fd3d",
+        "n": 6816,
+        "label_0": 3413,
+        "label_1": 3403,
+        "pct_label_1": 0.4993
+      }
+    },
+    "100": {
+      "train": {
+        "path": "sizes/100/train.jsonl",
+        "sha256": "034b03b3eef9343db332c64688600bb56ee6924851de773754a1e9b927d33e5f",
+        "n": 100,
+        "label_0": 50,
+        "label_1": 50,
+        "pct_label_1": 0.5
+      },
+      "val": {
+        "path": "sizes/100/val.jsonl",
+        "sha256": "92a9b6ff684ec16c46966a09e82e213cc68ef7dcb48ddf6c4167676095e36db3",
+        "n": 8520,
+        "label_0": 4266,
+        "label_1": 4254,
+        "pct_label_1": 0.4993
+      },
+      "test": {
+        "path": "sizes/100/test.jsonl",
+        "sha256": "8d3907dcf66a711d92ddc83a8f5ac4a948b91edacbafd40310299b5c0c77fd3d",
+        "n": 6816,
+        "label_0": 3413,
+        "label_1": 3403,
+        "pct_label_1": 0.4993
+      }
+    }
+  }
+}

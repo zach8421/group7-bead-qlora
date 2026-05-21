@@ -1,0 +1,17 @@
+{
+  "run_name": "qlora_beads_cleaned_flip_balanced_500__on__beads_val",
+  "eval_dataset": "beads",
+  "n_examples": 8520,
+  "accuracy": 0.38098591549295774,
+  "precision_pos": 0.3935281837160752,
+  "recall_pos": 0.44311236483309824,
+  "f1_pos": 0.41685095090667845,
+  "f1_macro": 0.3786355805058655,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.3649    0.3190    0.3404      4266\n      biased     0.3935    0.4431    0.4169      4254\n\n    accuracy                         0.3810      8520\n   macro avg     0.3792    0.3811    0.3786      8520\nweighted avg     0.3792    0.3810    0.3786      8520\n",
+  "eval_seconds": 217.476,
+  "eval_forward_seconds": 212.862,
+  "eval_batch_size": 16,
+  "smoke_test": false,
+  "adapter_path": "outputs/qlora_beads_cleaned_flip_balanced_500/adapter",
+  "test_jsonl": "data/frozen/beads/sizes/full/val.jsonl"
+}
