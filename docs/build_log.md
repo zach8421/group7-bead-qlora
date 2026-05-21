@@ -9,6 +9,219 @@ use the `run_meta.json` files in `outputs/<run>/`.
 
 ---
 
+## 2026-05-20 — Hand-labeling complete: IAA passed, BEADs noise ~70%
+
+**TL;DR**
+
+Three teammates hand-labeled 500 stratified random rows from BEADs test
+(200 each: 150 unique + 50 IAA-shared, blind). After one round of
+recalibration on the bias definition, **IAA gate passed** (81-88%
+pairwise agreement, Cohen's κ 0.57-0.75). All four headline
+measurements landed:
+
+| Metric | Value |
+| --- | ---: |
+| BEADs mislabel rate vs team consensus | **69.5%** |
+| BEADs missed bias (gold=clean, team=biased) | 148 |
+| BEADs over-called bias (gold=biased, team=clean) | **194** |
+| Directional asymmetry | 0.8 : 1 |
+| qlora_beads_full accuracy vs team consensus | **0.283** |
+| Cross-dataset ensemble flip-correctness | **85.1%** |
+| Gate decision for retrain step | **remove_and_flip** |
+
+Three findings worth pulling out:
+
+1. **BEADs has substantial label noise — ~70% of test rows disagree
+   with the calibrated 3-person team.** This is the headline statistic
+   for the writeup.
+
+2. **The noise direction is over-calling, not under-calling.** The
+   cross-eval matrix earlier suggested BEADs missed bias ~5× more
+   often than it over-called (5 : 1). The hand-labels show the
+   opposite direction: BEADs over-calls slightly more than it
+   misses (0.8 : 1). **The model-only signal was misleading about
+   which way the noise points.** Cross-dataset adapter agreement
+   captures *that something is wrong*, not *which direction it's
+   wrong*; only human labels resolve that.
+
+3. **The BEADs-fine-tuned QLoRA model has learned the noise.** Same
+   model that scored 0.7987 against BEADs's noisy gold scores **0.283
+   against careful human labels** (well below chance on a binary
+   task). The model is *highly aligned* with BEADs's labels and
+   *highly anti-aligned* with truth. Strongest single argument for
+   the cleaning + retraining experiment.
+
+**The labeling task as run**
+
+- **500 rows**, stratified 250 biased / 250 non-biased from BEADs test.
+- **3 labelers** (abrevaa, ash, zach), each labeled 200 rows: 150
+  unique + 50 shared IAA block randomly interleaved so labelers
+  couldn't tell which were shared.
+- **Blind**: no BEADs gold label, no QLoRA model predictions visible.
+- **Labels**: exactly `biased` / `non-biased` / blank (abstain).
+- Sampler script:
+  [scripts/make_labeling_csvs.py](../scripts/make_labeling_csvs.py)
+  (seed 42, reproducible).
+- Scoring script:
+  [scripts/score_hand_labels.py](../scripts/score_hand_labels.py).
+
+**IAA: failed first, passed after recalibration**
+
+First pass:
+
+| Pair | Agreement | Pairs | Cohen's κ |
+| --- | ---: | ---: | ---: |
+| abrevaa - ash | 81.2% | 48 | +0.57 (moderate) |
+| abrevaa - zach | 63.6% | 44 | +0.33 (fair) |
+| ash - zach | 63.0% | 46 | +0.35 (fair) |
+
+Zach was the outlier on 12 of 38 rows where everyone labeled (32%,
+vs 11% for abrevaa and 13% for ash). All 12 of zach's outlier calls
+were in the same direction: zach said `biased` and the other two
+said `non-biased`.
+
+Reading the rows revealed the calibration gap: zach was applying
+"biased" to *any opinion-shaped or sentiment-shaped text*, while
+abrevaa and ash were reserving it for opinions on **public-interest
+topics** (politics, social issues, contested public debates) per
+the README's definition. Examples zach miscalled:
+
+- *"feelin' for all my Pen fans right now"* (personal sports
+  sympathy)
+- *"vegging at home in my comfy pjs..."* (personal logistics)
+- *"So sad Figlios in Uptown is closing"* (restaurant comment)
+- *"@garrettscribner 150k?! Well, at least you have standards"*
+  (sarcasm at an individual)
+
+Zach went back, kept only the "biased" labels that genuinely
+applied to public-interest opinions, and filled in the 10 previously
+abstained rows. After this single recalibration pass:
+
+| Pair | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| abrevaa - ash | 81.2% | 81.2% | unchanged |
+| abrevaa - zach | 63.6% | **87.5%** | **+23.9 pp** |
+| ash - zach | 63.0% | **82.0%** | +19.0 pp |
+| three-way unanimous | 52.3% | **75.0%** | +22.7 pp |
+
+Cohen's κ jumped to 0.57-0.75 (moderate-to-substantial agreement).
+**IAA gate passed**; all pairwise % ≥ 70%.
+
+**Lesson for the methodology section**: blind-labeling without
+explicit pre-calibration on edge cases produces a single systematic
+offset (one labeler over-calling biased), not random scatter. One
+discussion round on a specific edge-case set was enough to align;
+re-labeling fixed it cleanly. The pre-registered IAA gate + the
+"if it fails, recalibrate and re-run" loop in the locked plan was
+the right structure for this.
+
+**Why the directional asymmetry flipped**
+
+The cross-eval matrix (2026-05-19 entry) measured *model* agreement
+patterns: when 3 non-BEADs adapters unanimously disagree with BEADs
+gold, what direction do they disagree in? Test split: 2,135 rows
+where ensemble said biased + BEADs said clean; 450 rows where
+ensemble said clean + BEADs said biased. 5 : 1 toward
+"BEADs missed bias."
+
+The hand-labels measure *human* agreement patterns. Same 500-row
+sample: 148 missed-bias + 194 over-called. 0.8 : 1 toward
+"BEADs over-called."
+
+Both are true. The reconciliation: the *non-BEADs adapters
+disagree with BEADs* in a particular direction, but **humans
+disagree with BEADs in a slightly different direction** because
+humans apply the "public-interest topic" requirement that the
+cross-dataset adapters don't have. The babe/cajcodes/wnc adapters
+are still working off lexical/tonal features of bias that include
+non-public-interest sentiment. Humans (with the calibrated
+definition) restrict bias to public-interest content, which means
+many of BEADs's "biased" calls on personal/sentiment-only content
+are revealed as over-calls.
+
+**This subtlety matters for the writeup**: the 5 : 1 number from
+the cross-eval was real but measured something different from what
+it appeared to. Don't conflate "models disagree with gold" with
+"gold is wrong in this direction."
+
+**Why qlora_beads_full scored 0.283 against hand-labels**
+
+The BEADs-fine-tuned QLoRA model agrees with BEADs gold ~80% of
+the time (it was trained on those labels). BEADs gold agrees with
+the team consensus ~30% of the time (the inverse of the 70%
+mislabel rate). So the model's expected accuracy against the team
+is roughly 0.8 × 0.3 + 0.2 × 0.7 = 0.38. Observed: 0.283.
+
+The gap (0.28 vs 0.38) is the model's errors *correlating* with
+BEADs's errors — the model didn't randomly memorize; it memorized
+the noisy pattern such that its errors land on roughly the same
+rows BEADs is wrong on. **The model is anti-aligned with truth by
+construction of its training data.**
+
+This is the strongest single piece of evidence that cleaning the
+training data could move the needle. If qlora_beads_full's noisy
+0.7987 against BEADs gold is the artifact, and 0.283 against
+truth is the reality, then a model retrained on cleaner training
+data should land somewhere meaningfully higher than 0.283 against
+the same hand-labels.
+
+**Flip-correctness gate: pass with high margin**
+
+199 of 500 rows in the sample were flagged (`cross_unanimous_disagree
+== 1`). On those flagged rows where the team consensus is
+non-abstain (195 rows), the ensemble's vote matches the team
+consensus on 166 — **85.1%**. Well above the 70% threshold for
+"both remove and flip retrains."
+
+Practically: if we use the ensemble's vote to *relabel* the
+flagged training rows (the "flip" intervention), the relabel will
+be correct ~85% of the time according to careful human judgment.
+The 15% incorrect relabels add some noise but are likely dominated
+by the 70% noise we'd be removing from the original gold. The
+flip experiment is justified.
+
+**What landed on disk**
+
+| Path | What it is | Tracked? |
+| --- | --- | --- |
+| [scripts/score_hand_labels.py](../scripts/score_hand_labels.py) | The scoring tool | Yes |
+| [labeling/labeler_abrevaa_labeled.csv](../labeling/labeler_abrevaa_labeled.csv) | abrevaa's 200 rows | Yes (experimental data) |
+| [labeling/labeler_ash_labeled.csv](../labeling/labeler_ash_labeled.csv) | ash's 200 rows | Yes |
+| [labeling/labeler_zach_labeled.csv](../labeling/labeler_zach_labeled.csv) | zach's 200 rows (post-recalibration) | Yes |
+| [labeling/_mapping.csv](../labeling/_mapping.csv) | Private join file (labeler letter → BEADs row_idx + gold + non_beads_vote) | Yes |
+| [labeling/LABELER_README.md](../labeling/LABELER_README.md) | Labeling protocol with definition + edge-case rules | Yes |
+| `hand_label_scoring_per_row.csv` | 500-row per-row diagnostics. Regenerable. | No (gitignored) |
+| `hand_label_scoring_summary.json` | Top-level summary stats. Regenerable. | No (gitignored) |
+| `hand_label_scoring_iaa_quicklook.csv` | 50 IAA rows side-by-side. Regenerable. | No (gitignored) |
+| `labeling/labeler_{a,b,c}.csv` | Blank task files from the sampler. Regenerable. | No (gitignored) |
+
+To regenerate the derived files at any time:
+
+```bash
+python scripts/score_hand_labels.py --label-map a=abrevaa b=ash c=zach
+```
+
+**Decisions still open**
+
+The gate decisions are all settled. What remains is launching the
+cleaning + retrain sweep on Tillicum:
+
+1. Apply the cleaning rule (`cross_unanimous_disagree == 1`) to
+   BEADs train using the 10,371 rows already identified by the
+   2026-05-19 train+val prediction job (entry above).
+2. Produce two cleaned train files:
+   - **Remove version**: 16,892 rows (27,263 minus 10,371 flagged)
+   - **Flip version**: 27,263 rows with the 10,371 flagged rows
+     relabeled to their `non_beads_vote` consensus
+3. Submit the full `qlora_{100, 500, 1k, 5k, full}` sweep × 2
+   cleaning methods = **10 retrains** (~$20-25, ~3 hrs wall).
+4. Evaluate each new adapter against the 500 hand-labels.
+5. Plot all three learning curves (original, removed, flipped) on
+   the same axis against hand-label accuracy. The headline plot
+   for the writeup.
+
+---
+
 ## 2026-05-19 — BEADs label-audit tool + cleaning experiment plan
 
 **What this adds**
