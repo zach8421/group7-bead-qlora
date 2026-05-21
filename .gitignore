@@ -65,12 +65,23 @@ logs/*
 # on hard kill).
 outputs/manifest.csv.lock
 
-# Hand-labeling task — work-in-progress per-labeler CSVs and the private
-# _mapping.csv that joins back to BEADs row_idx + gold + non_beads_vote.
-# Regenerable from scripts/make_labeling_csvs.py at the same --seed.
-# (When labels come back, completed labeler_<name>_labeled.csv files can
-# be committed individually if you want a permanent record.)
-labeling/
+# Hand-labeling task. The blank task CSVs (labeler_<name>.csv) are
+# regenerable from scripts/make_labeling_csvs.py at the same --seed.
+# The labeled CSVs (labeler_<name>_labeled.csv), the private _mapping.csv,
+# and the LABELER_README.md ARE the experimental ground truth and get
+# committed.
+labeling/labeler_*.csv
+!labeling/labeler_*_labeled.csv
+
+# Score-derived artifacts in repo root. Regenerable from
+# scripts/beads_spot_check.py and scripts/score_hand_labels.py respectively.
+beads_label_audit.csv
+beads_test_spotcheck.csv
+hand_label_scoring_*.csv
+hand_label_scoring_*.json
+
+# Local Claude / IDE session state.
+.claude/
 
 # ---- Cruft ----
 *.zip
