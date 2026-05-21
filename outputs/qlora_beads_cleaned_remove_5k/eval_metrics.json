@@ -1,0 +1,17 @@
+{
+  "run_name": "qlora_beads_cleaned_remove_5k",
+  "eval_dataset": "beads_cleaned_remove",
+  "n_examples": 6816,
+  "accuracy": 0.628080985915493,
+  "precision_pos": 0.5819486404833837,
+  "recall_pos": 0.9056714663532177,
+  "f1_pos": 0.7085871939303369,
+  "f1_macro": 0.5973505602735001,
+  "classification_report": "              precision    recall  f1-score   support\n\n  non-biased     0.7888    0.3513    0.4861      3413\n      biased     0.5819    0.9057    0.7086      3403\n\n    accuracy                         0.6281      6816\n   macro avg     0.6854    0.6285    0.5974      6816\nweighted avg     0.6855    0.6281    0.5972      6816\n",
+  "eval_seconds": 180.318,
+  "eval_forward_seconds": 176.105,
+  "eval_batch_size": 16,
+  "smoke_test": false,
+  "adapter_path": "outputs/qlora_beads_cleaned_remove_5k/adapter",
+  "test_jsonl": "data/frozen/beads_cleaned_remove/sizes/5k/test.jsonl"
+}
