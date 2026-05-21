@@ -74,11 +74,13 @@ labeling/labeler_*.csv
 !labeling/labeler_*_labeled.csv
 
 # Score-derived artifacts in repo root. Regenerable from
-# scripts/beads_spot_check.py and scripts/score_hand_labels.py respectively.
+# scripts/beads_spot_check.py, scripts/score_hand_labels.py, and
+# scripts/score_against_hand_labels.py respectively.
 beads_label_audit.csv
 beads_test_spotcheck.csv
 hand_label_scoring_*.csv
 hand_label_scoring_*.json
+hand_label_eval.csv
 
 # Local Claude / IDE session state.
 .claude/
