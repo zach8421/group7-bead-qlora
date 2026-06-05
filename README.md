@@ -79,6 +79,29 @@ Each adapter directory is self-contained (LoRA weights + tokenizer + chat templa
 └── logs/                           # Slurm stdout/stderr (gitignored content; dir kept)
 ```
 
+## Datasets
+
+The project uses four bias datasets: **BEADs** as the primary train/eval corpus,
+and **BABE**, **cajcodes/political-bias**, and **WNC** as the external datasets
+for the cross-evaluation matrix and the cleaning ensemble. **None of the raw
+data is committed to the repo** — each is gitignored and fetched from its source
+at runtime by the loaders in `scripts/dataset_loaders/`. Only the frozen-split
+**manifests** (`data/frozen/<dataset>/splits_manifest.json`, with SHA-256 hashes
+and the sampling seed) are tracked, so anyone can regenerate byte-identical
+splits.
+
+| Dataset | Role | Source (used by the code) | Citation |
+| --- | --- | --- | --- |
+| **BEADs** | Primary train + eval | HuggingFace [`shainar/BEAD`](https://huggingface.co/datasets/shainar/BEAD), bias-classification split (CC BY-NC 4.0) | Raza et al., 2024 — arXiv:2406.04220 |
+| **BABE** | External voter / transfer target | HuggingFace [`mediabiasgroup/BABE`](https://huggingface.co/datasets/mediabiasgroup/BABE) | Spinde et al., 2021 — arXiv:2209.14557 |
+| **cajcodes/political-bias** | External voter / transfer (synthetic) | HuggingFace [`cajcodes/political-bias`](https://huggingface.co/datasets/cajcodes/political-bias) | Jones, 2024 |
+| **WNC** | External voter / transfer target | Wiki Neutrality Corpus, `biased.word.*` single-word-edit subset from `bias_data.zip` ([Kaggle mirror](https://www.kaggle.com/datasets/chandiragunatilleke/wiki-neutrality-corpus)) | Pryzant et al., 2020 — arXiv:1911.09709 |
+
+BABE has no dataset-card README; its canonical reference is the Spinde et al.
+(2021) paper. BEAD is CC BY-NC 4.0 (see [`data/bead/README.md`](data/bead/README.md));
+the external datasets retain their respective source licenses — research use
+only. Full citations are in the report's References.
+
 ## First-time setup (after `git clone`)
 
 The raw BEAD CSVs and derived JSONL splits are **not** in the repo (CC BY-NC
