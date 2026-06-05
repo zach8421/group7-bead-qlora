@@ -1,41 +1,82 @@
 # BEAD QLoRA sweep — Group 7 (IMT 526 A, Spring 2026)
 
-Fine-tune **meta-llama/Llama-3.1-8B-Instruct** with **QLoRA** on the
-[BEAD](https://huggingface.co/datasets/shainar/BEAD) bias-classification
-split, sweeping over five training-set sizes (100, 500, 1k, 5k, full) to
-characterize the learning curve against few-shot prompting and a TF-IDF
-baseline. Targets run on a single H200 via UW's Tillicum cluster.
+QLoRA fine-tuning of **meta-llama/Llama-3.1-8B-Instruct** for binary news-bias
+classification on the [BEAD](https://huggingface.co/datasets/shainar/BEAD)
+dataset. What began as a learning-curve study became a label-noise
+investigation: BEADs's gold labels disagree with a calibrated three-person
+human consensus on **69.5%** of test rows, and a model trained on them scores
+**0.799** against BEADs's own labels but only **0.283** against careful human
+judgment. We use a cross-dataset adapter ensemble to flag and relabel the noisy
+rows, retrain, and recover a stable **0.72–0.77** against human labels (a
+**+44 to +49 pp** lift), with the cleaned model transferring to BABE far better
+than the original (**0.312 → 0.809**). Full write-up in
+[`submission/Final_Report.pdf`](submission/Final_Report.pdf). Total compute:
+~$26 across ~70 H200 jobs on UW's Tillicum cluster.
 
-> Project context: `Project Proposal v2` (shared Google Drive). This repo is
-> the artifact half — scripts, frozen splits, and the v1 calibration metrics.
-> The narrative writeup lives elsewhere.
+## Start here
+
+| If you want… | Read |
+| --- | --- |
+| The full narrative + results | [`submission/Final_Report.pdf`](submission/Final_Report.pdf) and [`submission/Final_Presentation.pdf`](submission/Final_Presentation.pdf) |
+| The chronological engineering log (every decision + measurement) | [`docs/build_log.md`](docs/build_log.md) |
+| The six-phase arc condensed, numbers in tables | [`docs/project_summary.md`](docs/project_summary.md) |
+| The headline figures | [`docs/figures/`](docs/figures/) — `learning_curve.png`, `cleaning_curve_f1.png`, `transfer_before_after.png` |
+| The human ground truth | [`labeling/`](labeling/) — `LABELER_README.md` (blind protocol), the three labeled CSVs, `_mapping.csv` |
+| The cleaning + scoring pipeline | `scripts/cross_eval.py`, `scripts/beads_spot_check.py`, `scripts/make_cleaned_train.py` + `make_cleaned_train_v2.py`, `scripts/score_hand_labels.py` + `score_against_hand_labels.py` |
+| The model code | `scripts/train_qlora.py`, `scripts/eval_adapter.py` |
+| The per-run metrics behind every number | `outputs/<run>/eval_metrics.json` + `run_meta.json` |
+
+## Model artifacts
+
+Trained LoRA adapters are **not** in the repo (35 runs, ~97 MB each). They live in two places:
+
+- **HuggingFace Hub** (durable) — the two headline adapters:
+  - [`zachary-greenman/beads-qlora-original-noisy`](https://huggingface.co/zachary-greenman/beads-qlora-original-noisy) — the original noisy-trained baseline (0.799 vs gold / 0.283 vs humans).
+  - [`zachary-greenman/beads-qlora-cleaned-flip-balanced-500`](https://huggingface.co/zachary-greenman/beads-qlora-cleaned-flip-balanced-500) — the cleaned-data winner (0.768 peak).
+- **UW Tillicum** (complete set) — all 35 adapters at `/gpfs/projects/imt526a/group7/outputs/<run>/adapter/`, readable through the `group7` allocation. Pull with `scripts/tillicum_sync.sh pull-results`.
+
+Each adapter directory is self-contained (LoRA weights + tokenizer + chat template) and loads on top of the gated base model. Every metric in the report is committed under `outputs/<run>/eval_metrics.json` and is regenerable from the frozen-split SHA-256 manifests.
 
 ## Repository layout
 
 ```text
 .
-├── README.md                              # this file
-├── LICENSE                                # MIT, applies to code only — see data/bead/README.md for data terms
-├── requirements.txt                       # pip pin-set mirroring the Tillicum `llm` env
-├── scripts/                               # v2 sweep (current)
-│   ├── freeze_splits.py                   # build nested stratified subsets + sha256 manifest
-│   ├── train_qlora.py                     # QLoRA SFT (4-bit nf4 + LoRA r=16), auto-writes run_meta
-│   ├── eval_adapter.py                    # likelihood-scored binary eval → metrics + predictions
-│   ├── update_manifest.py                 # upsert one row into outputs/manifest.csv after each run
-│   ├── run_qlora.slurm                    # one Slurm launcher; SIZE=100|500|1k|5k|full
-│   └── legacy/                            # v1 1k calibration scripts (kept for reproducibility)
+├── README.md                       # this file
+├── LICENSE                         # MIT (code only); data terms in data/bead/README.md
+├── requirements.txt                # pip pin-set mirroring the Tillicum `llm` env
+├── submission/                     # final report + slide deck (PDF)
+├── scripts/                        # full pipeline: train, eval, cross-eval, cleaning, scoring, figures
+│   ├── freeze_splits.py            # build nested stratified subsets + sha256 manifest
+│   ├── train_qlora.py              # QLoRA SFT (4-bit nf4 + LoRA r=16), auto-writes run_meta
+│   ├── eval_adapter.py             # likelihood-scored binary eval → metrics + predictions
+│   ├── cross_eval.py               # adapter × dataset cross-evaluation matrix
+│   ├── beads_spot_check.py         # cross-dataset ensemble label audit (flag suspect BEADs rows)
+│   ├── make_labeling_csvs.py       # blind hand-labeling task sampler (seed 42)
+│   ├── score_hand_labels.py        # IAA + BEADs mislabel rate vs the human consensus
+│   ├── make_cleaned_train.py       # round-1 cleaning (flag/flip/remove × balance)
+│   ├── make_cleaned_train_v2.py    # round-2 cleaning (4-voter strict/majority)
+│   ├── score_against_hand_labels.py  # score adapters vs the 492-row consensus
+│   ├── make_*_figures.py / make_*_curve.py  # figure generators
+│   ├── *.slurm, launch_*.sh        # Tillicum job launchers
+│   └── legacy/                     # v1 1k calibration scripts (kept for reproducibility)
+├── labeling/                       # human ground truth: LABELER_README.md + 3 labeled CSVs + _mapping.csv
 ├── data/
-│   ├── bead/                              # raw BEAD CSVs (CC BY-NC 4.0; .csv files gitignored — see README in folder)
-│   └── frozen/                            # splits_manifest.json is tracked; the JSONLs are gitignored and regenerable
+│   ├── bead/                       # raw BEAD CSVs (CC BY-NC 4.0; .csv gitignored — see README in folder)
+│   └── frozen/                     # splits_manifest.json tracked; JSONLs gitignored, regenerable
 ├── baselines/
-│   └── tfidf/                             # TF-IDF + logistic regression baseline (Abrevaa); notebook + eval metrics
+│   └── tfidf/                      # TF-IDF + logistic-regression baseline (notebook + eval metrics)
 ├── docs/
-│   ├── proposal_v2.txt                    # the May 9 Project Proposal v2 (full narrative)
-│   ├── v1_calibration_writeup.md          # the May 9 calibration run writeup
-│   └── build_log.md                       # running log of architecturally meaningful changes (source material for the final writeup)
-├── outputs/
-│   └── tillicum_1k_calibration/           # v1 metrics + predictions (adapter weights gitignored)
-└── logs/                                  # Slurm stdout/stderr (gitignored content; dir kept)
+│   ├── build_log.md                # chronological engineering log (primary writeup source)
+│   ├── project_summary.md          # six-phase arc condensed, numbers in tables
+│   ├── figures/                    # headline plots (learning curve, cleaning curve, transfer)
+│   ├── proposal_v2.txt             # the original May-9 Project Proposal v2
+│   └── v1_calibration_writeup.md   # the May-9 calibration run writeup
+├── outputs/                        # per-run eval_metrics.json / run_meta.json (adapter weights gitignored)
+│   ├── qlora_beads_*/              # original sweep (5 sizes)
+│   ├── qlora_beads_cleaned_*/      # round-1 (20) + round-2 (10) cleaned adapters
+│   ├── qlora_{babe,cajcodes,wnc}_full/   # external ensemble voters
+│   └── cross_eval/                 # adapter × dataset evaluation cells
+└── logs/                           # Slurm stdout/stderr (gitignored content; dir kept)
 ```
 
 ## First-time setup (after `git clone`)
